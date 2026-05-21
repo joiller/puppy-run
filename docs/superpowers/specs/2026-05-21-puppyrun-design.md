@@ -4,7 +4,9 @@ Date: 2026-05-21
 
 ## 1. Product Positioning
 
-PuppyRun is a web-based Agent operating platform for AI Agent technology stack selection.
+PuppyRun is a web-based Agent operating platform for technical stack and architecture decisions.
+
+The platform is domain-general: it should support many forms of technical decision-making, such as backend framework selection, data infrastructure selection, workflow engine selection, observability tooling, RAG tooling, and AI Agent stack selection. The first product workflow and public demo focus on AI Agent technology stack selection because that scenario best matches the initial job-seeking narrative and exposes rich Agent engineering concerns.
 
 The product helps developers make auditable, evidence-grounded technical decisions. A user can start with a natural-language question such as:
 
@@ -23,9 +25,9 @@ The platform does not immediately generate a static report. Instead, it runs a s
 
 The core differentiator is not "AI writes a report." The system turns technical decision-making into a versioned, inspectable, replayable Agent workflow.
 
-## 2. First-Version Scope
+## 2. Product Scope And First-Version Workflow
 
-The first version focuses on AI Agent technology stack selection, especially open-source Agent frameworks and related infrastructure.
+The product's long-term scope is technical decision support for open-source engineering choices. The first version focuses on AI Agent technology stack selection, especially open-source Agent frameworks and related infrastructure.
 
 Primary examples:
 
@@ -34,7 +36,16 @@ Primary examples:
 - RAG and knowledge tools such as LlamaIndex, LangChain, and Haystack.
 - Workflow and long-task infrastructure such as Temporal, Celery, BullMQ, and framework-native checkpointing.
 
-The initial demo should focus on Agent orchestration framework selection. This fits the job-seeking goal because it naturally exposes Agent architecture, tool calling, state persistence, human-in-the-loop design, observability, evaluation, and backend integration concerns.
+The initial demo should focus on Agent orchestration framework selection. This is a first-version workflow, not the platform's permanent boundary. It fits the job-seeking goal because it naturally exposes Agent architecture, tool calling, state persistence, human-in-the-loop design, observability, evaluation, and backend integration concerns.
+
+Future workflows can reuse the same runtime, evidence model, scoring model, versioning model, and trace system for other technology decisions, such as:
+
+- Backend framework selection.
+- Vector database selection.
+- Task queue or workflow engine selection.
+- Observability stack selection.
+- Search or database selection.
+- RAG framework selection.
 
 ## 3. Non-Goals For MVP
 
@@ -557,11 +568,11 @@ Success criteria:
 
 Possible resume title:
 
-PuppyRun: auditable AI Agent technology stack selection platform.
+PuppyRun: auditable Agent workbench for technical stack and architecture decisions.
 
 Resume bullets:
 
-- Designed and implemented a web Agent operating platform for AI Agent technology stack selection, supporting multi-turn clarification, candidate discovery, criteria generation, evidence matrix, and ADR versioning.
+- Designed and implemented a web Agent operating platform for technical stack and architecture decisions, with an initial AI Agent stack selection workflow supporting multi-turn clarification, candidate discovery, criteria generation, evidence matrix, and ADR versioning.
 - Built a unified Agent Runtime and Tool Runtime supporting built-in tools, REST tools, and MCP adapters with schema validation, permission checks, timeout/retry, idempotency keys, and tool call traces.
 - Implemented public GitHub repository analysis for README, releases, issues, PRs, contributors, license, and documentation quality to support open-source technology health scoring.
 - Designed a community risk verification loop that extracts risk signals from HN, Reddit, Stack Overflow, and technical discussions, then verifies them through official docs, GitHub issues, releases, and credible engineering writeups before affecting scores.
@@ -585,6 +596,7 @@ Resume bullets:
 The high-level direction has been approved:
 
 - Web Agent operating platform.
+- Domain-general technical stack and architecture decision workbench.
 - AI Agent technology stack selection as the first-version scenario.
 - Interactive decision workbench rather than static report.
 - Agent-generated candidates, criteria, and weights.
@@ -593,4 +605,3 @@ The high-level direction has been approved:
 - Open-source technologies as the main target.
 - Community sources included through a verification loop.
 - Deployment moved early through Phase 0 and Phase 1.
-

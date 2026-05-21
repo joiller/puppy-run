@@ -1,6 +1,8 @@
 # PuppyRun
 
-PuppyRun is an agentic, evidence-grounded workbench for AI Agent technology stack decisions.
+PuppyRun is an agentic, evidence-grounded workbench for technical stack and architecture decisions.
+
+The first demo workflow focuses on AI Agent technology stack selection.
 
 The project is currently in the design stage. Implementation has not started yet.
 
@@ -13,4 +15,3 @@ The project is currently in the design stage. Implementation has not started yet
 - Product name: `PuppyRun`
 - Repository name: `puppy-run`
 - Python package name: `puppyrun`
-
