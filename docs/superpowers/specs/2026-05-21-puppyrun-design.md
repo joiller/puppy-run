@@ -4,7 +4,7 @@ Date: 2026-05-21
 
 ## 1. Product Positioning
 
-PuppyRun is a web-based Agent operating platform for technical stack and architecture decisions.
+PuppyRun is an Agent decision platform for technical stack and architecture decisions, with an initial web console experience.
 
 The platform is domain-general: it should support many forms of technical decision-making, such as backend framework selection, data infrastructure selection, workflow engine selection, observability tooling, RAG tooling, and AI Agent stack selection. The first product workflow and public demo focus on AI Agent technology stack selection because that scenario best matches the initial job-seeking narrative and exposes rich Agent engineering concerns.
 
@@ -144,7 +144,7 @@ Community discussions are processed as signals:
 
 ### 4.7 Interactive Decision Workbench
 
-The final result lives in the web platform, not as a static report by default.
+The final result lives in the interactive platform, not as a static report by default. The first client is a web console, but the core decision workflow and Agent runtime should not depend on the web UI.
 
 The workbench includes:
 
@@ -174,7 +174,7 @@ It should:
 
 ## 5. Page And Interaction Design
 
-The app should be a work-focused web console, not a landing page.
+The first client should be a work-focused web console, not a landing page. Future clients such as a desktop app, mobile app, CLI, or IDE extension should be able to reuse the same backend decision workflow and Agent runtime.
 
 Main pages:
 
@@ -572,7 +572,7 @@ PuppyRun: auditable Agent workbench for technical stack and architecture decisio
 
 Resume bullets:
 
-- Designed and implemented a web Agent operating platform for technical stack and architecture decisions, with an initial AI Agent stack selection workflow supporting multi-turn clarification, candidate discovery, criteria generation, evidence matrix, and ADR versioning.
+- Designed and implemented an Agent decision platform for technical stack and architecture decisions, with an initial web console and AI Agent stack selection workflow supporting multi-turn clarification, candidate discovery, criteria generation, evidence matrix, and ADR versioning.
 - Built a unified Agent Runtime and Tool Runtime supporting built-in tools, REST tools, and MCP adapters with schema validation, permission checks, timeout/retry, idempotency keys, and tool call traces.
 - Implemented public GitHub repository analysis for README, releases, issues, PRs, contributors, license, and documentation quality to support open-source technology health scoring.
 - Designed a community risk verification loop that extracts risk signals from HN, Reddit, Stack Overflow, and technical discussions, then verifies them through official docs, GitHub issues, releases, and credible engineering writeups before affecting scores.
@@ -595,7 +595,7 @@ Resume bullets:
 
 The high-level direction has been approved:
 
-- Web Agent operating platform.
+- Agent decision platform with an initial web console.
 - Domain-general technical stack and architecture decision workbench.
 - AI Agent technology stack selection as the first-version scenario.
 - Interactive decision workbench rather than static report.
