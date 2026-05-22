@@ -42,3 +42,8 @@ class AgentEventResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class StartAgentRunResponse(BaseModel):
+    session: DecisionSessionResponse
+    run: AgentRunResponse
