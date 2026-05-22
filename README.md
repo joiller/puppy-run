@@ -57,6 +57,7 @@ Frontend build:
 ```bash
 cd apps/web
 npm install
+npm test
 npm run build
 ```
 
@@ -71,3 +72,16 @@ Smoke test:
 ```bash
 curl http://localhost:8000/health
 ```
+
+Manual browser acceptance:
+
+1. Open `http://localhost:5173`.
+2. Create a session.
+3. Click `Start dummy Agent run`.
+4. Without clicking `Refresh`, wait for polling to update both the session list and the `Run status` detail panel to `completed`.
+
+Public URL status:
+
+- `codex/phase-0` currently verifies the local deployable skeleton with Docker Compose.
+- No public deployment target or public URL is configured in this branch yet.
+- Public hosting should be handled by a follow-up deployment plan after choosing the target platform for the API, worker, PostgreSQL, Redis, and web client.

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { createSession, listSessions, startRun } from "./api";
 import type { DecisionSession } from "./types";
 import "./App.css";
@@ -10,14 +10,23 @@ export default function App() {
   const [prompt, setPrompt] = useState(samplePrompt);
   const [sessions, setSessions] = useState<DecisionSession[]>([]);
   const [selected, setSelected] = useState<DecisionSession | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
-  async function refreshSessions() {
+  function selectSession(session: DecisionSession | null) {
+    selectedIdRef.current = session?.id ?? null;
+    setSelected(session);
+  }
+
+  async function refreshSessions(selectedId = selectedIdRef.current) {
     const items = await listSessions();
     setSessions(items);
-    if (selected) {
-      setSelected(items.find((item) => item.id === selected.id) ?? selected);
+    if (selectedId) {
+      const current = items.find((item) => item.id === selectedId);
+      if (current) {
+        selectSession(current);
+      }
     }
   }
 
@@ -35,8 +44,8 @@ export default function App() {
     setError(null);
     try {
       const created = await createSession(prompt);
-      setSelected(created);
-      await refreshSessions();
+      selectSession(created);
+      await refreshSessions(created.id);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -50,8 +59,8 @@ export default function App() {
     setError(null);
     try {
       const result = await startRun(selected.id);
-      setSelected(result.session);
-      await refreshSessions();
+      selectSession(result.session);
+      await refreshSessions(result.session.id);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -94,7 +103,7 @@ export default function App() {
               <button
                 className={selected?.id === session.id ? "session selected" : "session"}
                 key={session.id}
-                onClick={() => setSelected(session)}
+                onClick={() => selectSession(session)}
                 type="button"
               >
                 <span>{session.title}</span>
