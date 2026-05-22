@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: puppyrun
+      POSTGRES_PASSWORD: puppyrun
+      POSTGRES_DB: puppyrun
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U puppyrun -d puppyrun"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      PUPPYRUN_ENV: development
+      PUPPYRUN_DATABASE_URL: postgresql+asyncpg://puppyrun:puppyrun@postgres:5432/puppyrun
+      PUPPYRUN_REDIS_URL: redis://redis:6379/0
+      PUPPYRUN_CORS_ORIGINS: '["http://localhost:5173"]'
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn puppyrun_api.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    environment:
+      PUPPYRUN_ENV: development
+      PUPPYRUN_DATABASE_URL: postgresql+asyncpg://puppyrun:puppyrun@postgres:5432/puppyrun
+      PUPPYRUN_REDIS_URL: redis://redis:6379/0
+    command: arq puppyrun_worker.main.WorkerSettings
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
