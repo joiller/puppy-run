@@ -1,3 +1,3 @@
-from puppyrun_api.routes import health
+from puppyrun_api.routes import health, sessions
 
-__all__ = ["health"]
+__all__ = ["health", "sessions"]

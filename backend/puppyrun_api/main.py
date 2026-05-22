@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from puppyrun_api.config import get_settings
-from puppyrun_api.routes import health
+from puppyrun_api.routes import health, sessions
 
 
 def create_app() -> FastAPI:
@@ -19,6 +19,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health.router)
+    app.include_router(sessions.router)
     return app
 
 
