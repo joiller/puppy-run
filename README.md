@@ -39,3 +39,35 @@ Expected local URLs:
 
 - API health: `http://localhost:8000/health`
 - Web console: `http://localhost:5173`
+
+## Phase 0 Verification
+
+Backend tests:
+
+```bash
+cd backend
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ".[dev]"
+pytest -q
+```
+
+Frontend build:
+
+```bash
+cd apps/web
+npm install
+npm run build
+```
+
+Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Smoke test:
+
+```bash
+curl http://localhost:8000/health
+```

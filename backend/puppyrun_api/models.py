@@ -1,6 +1,6 @@
-import enum
 import uuid
 from datetime import UTC, datetime
+from enum import StrEnum
 
 from sqlalchemy import JSON, DateTime, Enum, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -12,7 +12,7 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-class DecisionSessionStatus(str, enum.Enum):
+class DecisionSessionStatus(StrEnum):
     created = "created"
     queued = "queued"
     running = "running"
@@ -21,7 +21,7 @@ class DecisionSessionStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
-class AgentRunStatus(str, enum.Enum):
+class AgentRunStatus(StrEnum):
     queued = "queued"
     running = "running"
     completed = "completed"

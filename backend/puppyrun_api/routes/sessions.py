@@ -1,3 +1,4 @@
+from typing import Annotated
 from uuid import UUID
 
 from arq import create_pool
@@ -16,19 +17,20 @@ from puppyrun_api.schemas import (
 from puppyrun_worker.main import redis_settings_from_url
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 @router.post("", response_model=DecisionSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(
     body: CreateDecisionSessionRequest,
-    db: AsyncSession = Depends(get_session),
+    db: SessionDep,
 ) -> DecisionSessionResponse:
     session = await session_repo.create_decision_session(db, body.prompt)
     return DecisionSessionResponse.model_validate(session)
 
 
 @router.get("", response_model=list[DecisionSessionResponse])
-async def list_sessions(db: AsyncSession = Depends(get_session)) -> list[DecisionSessionResponse]:
+async def list_sessions(db: SessionDep) -> list[DecisionSessionResponse]:
     sessions = await session_repo.list_decision_sessions(db)
     return [DecisionSessionResponse.model_validate(session) for session in sessions]
 
@@ -36,7 +38,7 @@ async def list_sessions(db: AsyncSession = Depends(get_session)) -> list[Decisio
 @router.get("/{session_id}", response_model=DecisionSessionResponse)
 async def get_session_by_id(
     session_id: UUID,
-    db: AsyncSession = Depends(get_session),
+    db: SessionDep,
 ) -> DecisionSessionResponse:
     session = await session_repo.get_decision_session(db, session_id)
     if session is None:
@@ -47,7 +49,7 @@ async def get_session_by_id(
 @router.post("/{session_id}/runs", response_model=StartAgentRunResponse, status_code=202)
 async def start_dummy_run(
     session_id: UUID,
-    db: AsyncSession = Depends(get_session),
+    db: SessionDep,
 ) -> StartAgentRunResponse:
     session = await session_repo.get_decision_session(db, session_id)
     if session is None:
