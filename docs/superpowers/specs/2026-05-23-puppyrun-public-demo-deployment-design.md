@@ -33,6 +33,7 @@ The success criterion is not just that a static page loads. A reviewer must be a
 - Configure CORS so the public web console can call the public API.
 - Document public demo URLs and smoke-test steps in `README.md`.
 - Preserve the local Docker Compose path for development.
+- Preserve application-level portability for the later VPS and Kubernetes deployment target.
 
 ### Out Of Scope
 
@@ -42,12 +43,15 @@ The success criterion is not just that a static page loads. A reviewer must be a
 - Rate limiting, quota enforcement, cost budget enforcement, or admin UI.
 - Eval dashboard, MCP adapters, evidence matrix, ADR view, or decision versioning.
 - Production-grade monitoring, alerting, backups, and incident response.
+- VPS provisioning, reverse proxy setup, Kubernetes manifests, Helm charts, or GitOps configuration.
 
 Those items belong to later phases. This deployment is a Phase 0 public demo gate, not Phase 1 product logic or Phase 5 hardening.
 
 ## 3. Platform Choice
 
 Use Render Blueprint as the first public demo target.
+
+Render is only the Phase 0 public demo adapter. The final production-oriented target for PuppyRun is VPS and Kubernetes deployment. This means the implementation must not put PuppyRun runtime assumptions inside Render-specific behavior. Render-specific configuration belongs in `render.yaml`; application code should continue to depend on portable process contracts, environment variables, PostgreSQL, Redis, Docker images, and Alembic migrations.
 
 Reasons:
 
@@ -58,9 +62,34 @@ Reasons:
 
 Railway remains a reasonable fallback because it also supports multi-service projects, managed databases, Redis, Dockerfile builds, public networking, and private networking. Fly.io is more powerful but should be deferred because it introduces more infrastructure responsibility than Phase 0 needs.
 
-## 4. Deployment Topology
+## 4. Portability Requirements
 
-### 4.1 Web Static Site
+The Phase 0 public demo should make later VPS and Kubernetes deployment easier, not harder.
+
+The stable deployment contract is:
+
+- `apps/web` builds to static assets with `npm run build`.
+- `backend/Dockerfile` builds a backend image that can run either API or worker commands.
+- API startup is a normal long-running process that binds to `0.0.0.0` and reads `PORT`.
+- Worker startup is a normal long-running process that runs `arq puppyrun_worker.main.WorkerSettings`.
+- PostgreSQL is reached through `PUPPYRUN_DATABASE_URL`.
+- Redis is reached through `PUPPYRUN_REDIS_URL`.
+- Alembic owns schema migration.
+- CORS is configured through `PUPPYRUN_CORS_ORIGINS`.
+
+The implementation must avoid:
+
+- calling Render APIs from application code
+- relying on Render-only filesystem paths
+- hard-coding `onrender.com` domains outside deployment configuration and documentation
+- assuming managed database connection string formats without normalization
+- replacing Docker Compose local development with a Render-only workflow
+
+For the later VPS target, these same contracts should map to Docker Compose plus a reverse proxy such as Caddy or Nginx. For the later Kubernetes target, they should map to Deployments for API and worker, a static web container or CDN-backed static hosting, Secrets/ConfigMaps for env, Services/Ingress for networking, and managed or in-cluster PostgreSQL/Redis depending on the production decision at that time.
+
+## 5. Deployment Topology
+
+### 5.1 Web Static Site
 
 Service type: Render Static Site.
 
@@ -90,7 +119,7 @@ VITE_API_BASE_URL=https://<puppyrun-api>.onrender.com
 
 The public web URL is the primary Phase 0 public URL. The browser calls the public API URL directly. No secrets are embedded in the frontend.
 
-### 4.2 API Web Service
+### 5.2 API Web Service
 
 Service type: Render Web Service.
 
@@ -116,7 +145,7 @@ PUPPYRUN_CORS_ORIGINS=["https://<puppyrun-web>.onrender.com"]
 
 The API should remain stateless except for PostgreSQL and Redis.
 
-### 4.3 Background Worker
+### 5.3 Background Worker
 
 Service type: Render Background Worker.
 
@@ -136,7 +165,7 @@ PUPPYRUN_REDIS_URL=<same redis/key-value URL as API>
 
 The worker has no public URL. It consumes jobs from Redis and writes status changes to PostgreSQL.
 
-### 4.4 PostgreSQL
+### 5.4 PostgreSQL
 
 Service type: Render PostgreSQL.
 
@@ -148,7 +177,7 @@ Phase 0 requirements:
 
 The implementation should make backend configuration tolerant of provider URL formats. Hosted platforms often provide `postgres://` or `postgresql://` connection strings; SQLAlchemy async code needs `postgresql+asyncpg://`.
 
-### 4.5 Redis-Compatible Queue
+### 5.5 Redis-Compatible Queue
 
 Service type: Render Key Value, used as the Redis-compatible queue backend for arq.
 
@@ -160,9 +189,9 @@ Phase 0 requirements:
 
 The worker queue is still only used for the dummy Agent job in Phase 0.
 
-## 5. Configuration Design
+## 6. Configuration Design
 
-### 5.1 `render.yaml`
+### 6.1 `render.yaml`
 
 Add a root-level `render.yaml` that declares:
 
@@ -176,7 +205,7 @@ Add a root-level `render.yaml` that declares:
 
 Secrets and generated connection strings should not be committed. Values that Render generates should be referenced through Blueprint environment variable bindings.
 
-### 5.2 Backend Port Handling
+### 6.2 Backend Port Handling
 
 The backend must support both local and hosted startup.
 
@@ -188,7 +217,7 @@ Expected behavior:
 
 This should be handled either through the Render start command or through backend settings. The implementation should prefer the smallest change that keeps local development unchanged.
 
-### 5.3 Database URL Normalization
+### 6.3 Database URL Normalization
 
 Backend settings should normalize PostgreSQL URLs before SQLAlchemy engine creation:
 
@@ -198,7 +227,7 @@ Backend settings should normalize PostgreSQL URLs before SQLAlchemy engine creat
 
 This avoids provider-specific connection string failures while preserving the existing local `.env.example`.
 
-### 5.4 CORS
+### 6.4 CORS
 
 Production CORS should allow only the public web URL.
 
@@ -210,7 +239,7 @@ http://localhost:5173
 
 The implementation must avoid `*` CORS in the public demo because the API can mutate demo state.
 
-### 5.5 Public Demo Data Boundary
+### 6.5 Public Demo Data Boundary
 
 Phase 0 does not have user accounts. Public demo data should be treated as disposable.
 
@@ -222,7 +251,7 @@ The README should state:
 
 If abuse becomes a concern, add a later demo gate such as basic auth, a shared demo passphrase, or session quota. Do not include that in this Phase 0 deployment unless required by the hosting platform or immediate public sharing risk.
 
-## 6. Local Development Compatibility
+## 7. Local Development Compatibility
 
 The deployment work must not break the current local contract:
 
@@ -240,9 +269,9 @@ http://localhost:5173
 
 Backend tests, web tests, and the Docker Compose smoke path should continue to pass after deployment configuration changes.
 
-## 7. Verification
+## 8. Verification
 
-### 7.1 Local Verification
+### 8.1 Local Verification
 
 Run:
 
@@ -270,7 +299,7 @@ curl http://localhost:8000/health
 
 Then manually verify the local web console still creates a session, starts a dummy Agent run, and updates the selected session detail panel to `completed`.
 
-### 7.2 Public Verification
+### 8.2 Public Verification
 
 After Render deploys:
 
@@ -288,21 +317,22 @@ After Render deploys:
 
 The public deployment passes Phase 0 only when both the web page and the async worker loop work through hosted PostgreSQL and Redis.
 
-## 8. Documentation Updates
+## 9. Documentation Updates
 
 Update `README.md` with:
 
 - public web URL placeholder or final URL after deployment
 - public API health URL placeholder or final URL after deployment
-- Render service topology
+- Render service topology and the note that Render is a Phase 0 demo adapter, not the final production target
 - required environment variables
 - local development command
 - public smoke-test steps
 - warning that public demo data is disposable
+- portability note for later VPS and Kubernetes deployment
 
 If final public URLs are not known before merging the deployment configuration, document placeholders and replace them after the first successful deployment.
 
-## 9. Risks And Mitigations
+## 10. Risks And Mitigations
 
 - **Provider URL mismatch:** normalize PostgreSQL URLs before creating the async SQLAlchemy engine.
 - **Vite env mismatch:** `VITE_API_BASE_URL` must be present at web build time, not only runtime.
@@ -311,8 +341,10 @@ If final public URLs are not known before merging the deployment configuration, 
 - **Worker not running:** public verification must include dummy run completion, not just API health.
 - **Free-tier sleeping or cold starts:** acceptable for Phase 0 demo if documented; not acceptable for later production-hardening phases.
 - **Public write access:** acceptable for Phase 0 only with disposable demo data; add auth or quota later if sharing more widely.
+- **Platform lock-in:** keep Render-specific logic in `render.yaml` and documentation, not in application code.
+- **Future VPS/Kubernetes drift:** preserve Docker, env var, PostgreSQL, Redis, and Alembic contracts so later deployment work is configuration-heavy rather than application rewrite-heavy.
 
-## 10. Implementation Boundary
+## 11. Implementation Boundary
 
 The follow-up implementation plan should be small and sequential:
 
@@ -324,3 +356,5 @@ The follow-up implementation plan should be small and sequential:
 6. Deploy and run public smoke tests.
 
 Do not combine this work with Phase 1 Agent runtime features. The only Agent behavior in this deployment is the existing dummy Agent job.
+
+Do not add VPS provisioning scripts or Kubernetes manifests in this Phase 0 public demo task. Those are later deployment tracks. This task should only keep the application portable enough that those tracks are straightforward.
