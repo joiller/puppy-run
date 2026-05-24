@@ -85,3 +85,44 @@ Public URL status:
 - `codex/phase-0` currently verifies the local deployable skeleton with Docker Compose.
 - No public deployment target or public URL is configured in this branch yet.
 - Public hosting should be handled by a follow-up deployment plan after choosing the target platform for the API, worker, PostgreSQL, Redis, and web client.
+
+## Public Demo Deployment
+
+Phase 0 public demo deployment uses Render Blueprint as a short-term public URL adapter.
+The final production-oriented deployment target remains VPS and Kubernetes, so application
+code must stay portable across Docker, environment variables, PostgreSQL, Redis, and Alembic.
+
+Render services declared in `render.yaml`:
+
+- `puppyrun-phase0-web`: static React/Vite web console.
+- `puppyrun-phase0-api`: FastAPI API web service.
+- `puppyrun-phase0-worker`: arq background worker.
+- `puppyrun-phase0-db`: PostgreSQL database.
+- `puppyrun-phase0-queue`: Redis-compatible Render Key Value queue.
+
+Expected Render URLs:
+
+- Web: `https://puppyrun-phase0-web.onrender.com`
+- API health: `https://puppyrun-phase0-api.onrender.com/health`
+
+If Render assigns different public subdomains, update both `render.yaml` and this README before
+using the public smoke test as Phase 0 evidence.
+
+Public demo data is disposable. Anyone with the URL can create demo sessions, so do not enter
+private prompts, secrets, credentials, or confidential project details.
+
+### Public Smoke Test
+
+1. Open `https://puppyrun-phase0-web.onrender.com`.
+2. Create a decision session.
+3. Click `Start dummy Agent run`.
+4. Do not click `Refresh`.
+5. Wait until the selected session detail panel shows `completed`.
+6. Open `https://puppyrun-phase0-api.onrender.com/health` and confirm:
+
+```json
+{"status":"ok","service":"puppyrun-api"}
+```
+
+Phase 0 public URL verification passes only when the public web page and hosted async worker loop
+both work through hosted PostgreSQL and Redis.
