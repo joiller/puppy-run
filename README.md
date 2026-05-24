@@ -82,9 +82,9 @@ Manual browser acceptance:
 
 Public URL status:
 
-- `codex/phase-0` currently verifies the local deployable skeleton with Docker Compose.
-- No public deployment target or public URL is configured in this branch yet.
-- Public hosting should be handled by a follow-up deployment plan after choosing the target platform for the API, worker, PostgreSQL, Redis, and web client.
+- `codex/phase-0` verified the local deployable skeleton with Docker Compose.
+- This branch configures the Phase 0 public demo target through `render.yaml`, but no live Render Blueprint has been created or publicly verified yet.
+- Public URL verification still requires creating the Render resources and running the public smoke test below.
 
 ## Public Demo Deployment
 
