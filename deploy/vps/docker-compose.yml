@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: puppyrun
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/vps/.env}
+      POSTGRES_DB: puppyrun
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U puppyrun -d puppyrun"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ../../backend
+    restart: unless-stopped
+    environment:
+      PUPPYRUN_ENV: production
+      PUPPYRUN_DATABASE_URL: postgresql+asyncpg://puppyrun:${POSTGRES_PASSWORD_URLENCODED:?set POSTGRES_PASSWORD_URLENCODED in deploy/vps/.env}@postgres:5432/puppyrun
+      PUPPYRUN_REDIS_URL: redis://redis:6379/0
+      PUPPYRUN_CORS_ORIGINS: ${PUPPYRUN_CORS_ORIGINS:?set PUPPYRUN_CORS_ORIGINS in deploy/vps/.env}
+    command: sh -c "alembic upgrade head && uvicorn puppyrun_api.main:app --host 0.0.0.0 --port 8000"
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ../../backend
+    restart: unless-stopped
+    environment:
+      PUPPYRUN_ENV: production
+      PUPPYRUN_DATABASE_URL: postgresql+asyncpg://puppyrun:${POSTGRES_PASSWORD_URLENCODED:?set POSTGRES_PASSWORD_URLENCODED in deploy/vps/.env}@postgres:5432/puppyrun
+      PUPPYRUN_REDIS_URL: redis://redis:6379/0
+    command: arq puppyrun_worker.main.WorkerSettings
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/vps/web.Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+    environment:
+      PUPPYRUN_PUBLIC_HOST: ${PUPPYRUN_PUBLIC_HOST:?set PUPPYRUN_PUBLIC_HOST in deploy/vps/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

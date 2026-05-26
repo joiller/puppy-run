@@ -1,0 +1,21 @@
+{
+	admin off
+}
+
+{$PUPPYRUN_PUBLIC_HOST} {
+	encode zstd gzip
+	root * /srv/puppyrun
+
+	handle /health {
+		reverse_proxy api:8000
+	}
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -10,6 +10,8 @@ The project is currently in Phase 0: deployable skeleton.
 
 - [PuppyRun design spec](docs/superpowers/specs/2026-05-21-puppyrun-design.md)
 - [Phase 0 implementation plan](docs/superpowers/plans/2026-05-21-puppyrun-phase-0-plan.md)
+- [VPS public demo deployment design](docs/superpowers/specs/2026-05-23-puppyrun-public-demo-deployment-design.md)
+- [VPS public demo deployment plan](docs/superpowers/plans/2026-05-23-puppyrun-public-demo-deployment-plan.md)
 
 ## Naming
 
@@ -83,46 +85,54 @@ Manual browser acceptance:
 Public URL status:
 
 - `codex/phase-0` verified the local deployable skeleton with Docker Compose.
-- This branch configures the Phase 0 public demo target through `render.yaml`, but no live Render Blueprint has been created or publicly verified yet.
-- Public URL verification still requires creating the Render resources and running the public smoke test below.
+- The previous Render Blueprint direction has been canceled.
+- The current public demo target is direct VPS deployment using Docker Compose and a reverse proxy.
+- Temporary raw-IP HTTP public URL verification passed on `2026-05-26`; the real IP is kept in private local notes, not in repo docs.
+- A domain-backed HTTPS URL is still pending.
 
 ## Public Demo Deployment
 
-Phase 0 public demo deployment uses Render Blueprint as a short-term public URL adapter.
-The final production-oriented deployment target remains VPS and Kubernetes, so application
-code must stay portable across Docker, environment variables, PostgreSQL, Redis, and Alembic.
+Phase 0 public demo deployment targets a VPS. The intended topology is:
 
-Render services declared in `render.yaml`:
+- The included VPS path uses Caddy to terminate public HTTP/HTTPS traffic.
+- Static React/Vite assets are served from the VPS.
+- `/api/*` and `/health` proxy to the private FastAPI API container.
+- The API and worker containers share private PostgreSQL and Redis containers.
+- Alembic migrations run before API startup.
 
-- `puppyrun-phase0-web`: static React/Vite web console.
-- `puppyrun-phase0-api`: FastAPI API web service.
-- `puppyrun-phase0-worker`: arq background worker.
-- `puppyrun-phase0-db`: PostgreSQL database.
-- `puppyrun-phase0-queue`: Redis-compatible Render Key Value queue.
+The application code should stay portable across Docker, environment variables, PostgreSQL, Redis, and Alembic. VPS-specific configuration belongs in deployment files and documentation, not in the Python or React runtime logic.
 
-Expected Render URLs:
+For VPS deployment, `POSTGRES_PASSWORD` is the raw database password for PostgreSQL, and `POSTGRES_PASSWORD_URLENCODED` is the URL-encoded value used inside `PUPPYRUN_DATABASE_URL` for API and worker containers. URL-encode characters such as `@`, `:`, `/`, `%`, and `#`. Generate the encoded value with:
 
-- Web: `https://puppyrun-phase0-web.onrender.com`
-- API health: `https://puppyrun-phase0-api.onrender.com/health`
+```sh
+python3 - <<'PY'
+from urllib.parse import quote
+print(quote(input("PostgreSQL password: "), safe=""))
+PY
+```
 
-If Render assigns different public subdomains, update both `render.yaml` and this README before
-using the public smoke test as Phase 0 evidence.
+Put the command output in `POSTGRES_PASSWORD_URLENCODED` and keep the original raw value in `POSTGRES_PASSWORD`.
 
-Public demo data is disposable. Anyone with the URL can create demo sessions, so do not enter
-private prompts, secrets, credentials, or confidential project details.
+Expected public URLs after deployment:
+
+- Temporary raw-IP web: `http://<vps-ip>`
+- Temporary raw-IP API health: `http://<vps-ip>/health`
+- Domain HTTPS web: `https://<public-demo-host>` when DNS is configured.
+- Domain HTTPS API health: `https://<public-demo-host>/health` when DNS is configured.
+
+Public demo data is disposable. Anyone with the URL can create demo sessions, so do not enter private prompts, secrets, credentials, or confidential project details.
 
 ### Public Smoke Test
 
-1. Open `https://puppyrun-phase0-web.onrender.com`.
+1. Open the public web URL.
 2. Create a decision session.
 3. Click `Start dummy Agent run`.
 4. Do not click `Refresh`.
 5. Wait until the selected session detail panel shows `completed`.
-6. Open `https://puppyrun-phase0-api.onrender.com/health` and confirm:
+6. Open the public API health URL and confirm:
 
 ```json
 {"status":"ok","service":"puppyrun-api"}
 ```
 
-Phase 0 public URL verification passes only when the public web page and hosted async worker loop
-both work through hosted PostgreSQL and Redis.
+Phase 0 public URL verification passes only when the public web page and hosted async worker loop both work through the VPS-hosted PostgreSQL and Redis services.
