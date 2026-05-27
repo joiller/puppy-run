@@ -4,7 +4,9 @@ PuppyRun is an agentic, evidence-grounded workbench for technical stack and arch
 
 The first demo workflow focuses on AI Agent technology stack selection. The first client is a web console, while the core decision workflow is designed to be reusable by future clients such as desktop, mobile, CLI, or IDE integrations.
 
-The project is currently in Phase 0: deployable skeleton.
+Phase 0 is closed at the repository scope: the local deployable skeleton and the
+temporary VPS public demo loop have both been verified. The next product work is
+Phase 1 planning and implementation for the first real Agent workflow.
 
 ## Design
 
@@ -88,7 +90,8 @@ Public URL status:
 - The previous Render Blueprint direction has been canceled.
 - The current public demo target is direct VPS deployment using Docker Compose and a reverse proxy.
 - Temporary raw-IP HTTP public URL verification passed on `2026-05-26`; the real IP is kept in private local notes, not in repo docs.
-- A domain-backed HTTPS URL is still pending.
+- Domain DNS and HTTPS setup are external VPS/domain operations, not a remaining repository task.
+- Real public hosts are intentionally not committed to this repository. Keep them in the VPS `deploy/vps/.env` file or private deployment notes.
 
 ## Public Demo Deployment
 
@@ -113,12 +116,12 @@ PY
 
 Put the command output in `POSTGRES_PASSWORD_URLENCODED` and keep the original raw value in `POSTGRES_PASSWORD`.
 
-Expected public URLs after deployment:
+Public host handling:
 
-- Temporary raw-IP web: `http://<vps-ip>`
-- Temporary raw-IP API health: `http://<vps-ip>/health`
-- Domain HTTPS web: `https://<public-demo-host>` when DNS is configured.
-- Domain HTTPS API health: `https://<public-demo-host>/health` when DNS is configured.
+- The checked-in deployment reads the public host from the VPS-local `deploy/vps/.env` file.
+- For a temporary raw-IP HTTP demo, configure that file on the VPS and verify the web page plus `/health` through that host.
+- For a domain-backed HTTPS demo, point DNS to the VPS, open `80/443`, set the domain in the VPS-local env file, restart the stack, and verify the same smoke test.
+- Do not commit real public URLs, VPS IPs, SSH targets, or secrets to repository docs.
 
 Public demo data is disposable. Anyone with the URL can create demo sessions, so do not enter private prompts, secrets, credentials, or confidential project details.
 

@@ -1,20 +1,24 @@
 # Phase 0 验收问题总结
 
-最后更新：2026-05-22
+最后更新：2026-05-27
 
 ## 结论
 
-`codex/phase-0` worktree 的 Phase 0 本地核心链路基本可运行，但还不能判定为完整满足 Phase 0 验收标准。
+本文件最初记录的是 2026-05-22 的 Phase 0 验收缺口。当时 `codex/phase-0` worktree 的本地核心链路基本可运行，但 public URL 尚未验证。
 
-剩余阻塞原因：
+截至 2026-05-27，Phase 0 在仓库范围内已经收敛关闭：
 
-- 设计标准中的 public URL 尚未验证，当前只有本地 Docker Compose。
+- 本地 deployable skeleton 已验证并合入 `main`。
+- Web console 的右侧已选 session 详情自动刷新缺口已修复，并有前端回归测试覆盖。
+- VPS public demo 已在 2026-05-26 通过临时 raw-IP HTTP 验证：公网 web、API `/health`、API session/run polling、Redis/arq worker 到前端自动 `completed` 的闭环均已通过。
+- 真实 VPS IP、SSH target 和 public host 不提交到仓库文档；这些值只保存在 VPS-local `.env` 或私有运维记录中。
+- 域名 DNS 和 HTTPS 绑定属于外部部署运维，不再作为 Phase 0 仓库任务阻塞项。
 
-本轮已处理的缺口：
+本轮已处理的历史缺口：
 
 - Web console 的右侧已选 session 详情自动刷新缺口已修复，并新增了前端回归测试覆盖该轮询路径。
 
-另外需要注意：根目录 `main` 分支仍主要是设计文档；Phase 0 实现位于 `.worktrees/codex-phase-0` / `codex/phase-0`。讨论 Phase 0 是否满足验收时，必须先说明验收对象是哪个分支或 worktree。
+另外需要注意：下面的验收细节保留为历史记录。当前判断应以 `main`、`README.md` 和 VPS deployment plan 的 2026-05-26/2026-05-27 更新为准。
 
 ## 已通过项
 
@@ -32,7 +36,7 @@
 
 这些证据说明后端 API、数据库、Redis/arq worker、Docker Compose 和 dummy job 的最小闭环已经跑通。
 
-## 未通过或未完全满足项
+## 历史未通过或未完全满足项
 
 ### 1. 缺少 public URL 验证
 
@@ -49,7 +53,9 @@ Phase 0 设计文档的 success criteria 包含：
 
 未看到 Netlify、Render、Fly.io、Railway、Cloud Run、Vercel 或其他公开部署配置，也没有可访问的 public URL 记录。
 
-判断：本地 deployable skeleton 通过，但 public URL success criterion 尚未满足。
+历史判断：本地 deployable skeleton 通过，但 public URL success criterion 尚未满足。
+
+当前状态：该缺口已经通过 VPS 临时 raw-IP HTTP public demo 验证关闭。域名 DNS 和 HTTPS 可以继续作为部署运维优化处理，但不再阻塞 Phase 0 仓库收敛。
 
 ### 2. 前端已选 session 详情自动刷新缺口已处理
 
@@ -91,5 +97,6 @@ Phase 0 设计文档的 success criteria 包含：
 
 ## 当前验收判断
 
-- 如果验收对象是 `main`：不满足 Phase 0，因为实现尚未进入主分支。
-- 如果验收对象是 `codex/phase-0`：本地核心链路通过，前端 detail 自动刷新缺口已处理，但 public URL 仍未验证。
+- 如果验收对象是 `main`：Phase 0 仓库范围已关闭，本地核心链路、前端 detail 自动刷新、VPS public demo 闭环都已验证。
+- `codex/phase-0` worktree 和本地分支已经是历史执行路径，不再作为当前验收对象。
+- 域名 DNS、HTTPS 证书、真实 URL 记录方式属于外部部署运维边界；真实 public URL 不写入仓库 README。

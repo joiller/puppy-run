@@ -619,10 +619,12 @@ Expected: containers stop cleanly.
 ### Task 8: VPS Deployment And Public Verification
 
 **Files:**
-- Modify: `README.md` after the real public host is known.
+- Do not modify `README.md` with the real public host.
 - Modify: `deploy/vps/.env` on the VPS only; do not commit it.
 
-**Execution note, 2026-05-26:** The first public demo was deployed as a temporary raw-IP HTTP demo because no domain is configured yet. The real IP, SSH username, and local key path are kept in private local notes rather than commit-bound repo docs. The VPS needed Docker Engine and the Docker Compose plugin installed. Docker Hub pulls from the VPS timed out, so the current local Compose images were built locally, transferred with `docker save | gzip | ssh docker load`, and started on the VPS with `docker compose -p puppyrun up --no-build --pull never -d`. Public `/health`, API session/run polling, and browser smoke verification passed. README records placeholder temporary HTTP URLs; no commit has been created because repo state changes still require explicit user authorization.
+**Execution note, 2026-05-26:** The first public demo was deployed as a temporary raw-IP HTTP demo because no domain is configured yet. The real IP, SSH username, and local key path are kept in private local notes rather than commit-bound repo docs. The VPS needed Docker Engine and the Docker Compose plugin installed. Docker Hub pulls from the VPS timed out, so the current local Compose images were built locally, transferred with `docker save | gzip | ssh docker load`, and started on the VPS with `docker compose -p puppyrun up --no-build --pull never -d`. Public `/health`, API session/run polling, and browser smoke verification passed.
+
+**Closure note, 2026-05-27:** Phase 0 is closed at the repository scope. The real public host should remain in the VPS-local `deploy/vps/.env` file or private deployment notes, not in `README.md`. Domain DNS and HTTPS binding are external VPS/domain operations and do not require repository code changes unless deployment configuration assumptions change.
 
 - [x] **Step 1: Stop for user authorization before touching the VPS**
 
@@ -634,9 +636,9 @@ This deployment will use your VPS, open/serve public HTTP and HTTPS traffic, and
 
 Expected: proceed only after the user authorizes and provides the real SSH target and public host.
 
-- [x] **Step 2: Verify DNS points to the VPS**
+- [x] **Step 2: Verify the public host points to the VPS when a domain is used**
 
-For the 2026-05-26 temporary raw-IP deployment, DNS was not applicable. The public host was a raw VPS IP; the real IP is kept in private local notes. Domain-backed HTTPS remains pending.
+For the 2026-05-26 temporary raw-IP deployment, DNS was not applicable. The public host was a raw VPS IP; the real IP is kept in private local notes. Domain-backed HTTPS can be configured later as an external deployment operation.
 
 Run from the local machine after the user provides the host:
 
@@ -718,21 +720,18 @@ Then:
 
 Expected: the selected session detail panel updates to `completed` and shows the dummy Agent summary.
 
-- [ ] **Step 7: Record final public URLs**
+- [x] **Step 7: Close Phase 0 without committing final public URLs**
 
-Update `README.md` with the actual public host:
+Do not update `README.md` with the actual public host. Keep real public URLs, VPS IPs, SSH targets, and secrets outside the repository.
 
-- Web URL: `https://${PUPPYRUN_PUBLIC_HOST}`
-- API health URL: `https://${PUPPYRUN_PUBLIC_HOST}/health`
+Repository docs should record only:
 
-Then commit:
+- the deployment topology
+- the smoke-test procedure
+- the fact that real host values live in VPS-local env or private deployment notes
+- the boundary that domain DNS and HTTPS are external deployment operations
 
-```bash
-git add README.md
-git commit -m "docs: record vps public demo urls"
-```
-
-Expected: README reflects the verified public deployment.
+Expected: Phase 0 is considered closed for the repository once the public web page, API health endpoint, and dummy Agent worker loop have been verified through the VPS-hosted stack.
 
 ---
 

@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.12, FastAPI, SQLAlchemy 2 async, Alembic, PostgreSQL, Redis, arq, pytest, React, TypeScript, Vite, Docker Compose.
 
+**Closure status, 2026-05-27:** Phase 0 is closed at the repository scope. The local deployable skeleton was implemented and merged into `main`; the selected-session polling gap was fixed; and the VPS public demo loop was verified through a temporary raw-IP HTTP deployment on 2026-05-26. Real public URLs, VPS IPs, SSH targets, and secrets are intentionally not recorded in repository docs.
+
 ---
 
 ## Scope Check
@@ -2092,7 +2094,8 @@ Then open `http://localhost:5173`, create a session, start the dummy Agent run, 
 - No real candidate discovery.
 - No real evidence collection.
 - No auth beyond local development assumptions.
-- No production deployment target is configured yet.
+- The repository includes a VPS deployment path under `deploy/vps/`, but it is still a Phase 0 public demo path rather than production hardening.
+- Domain DNS and HTTPS are external deployment operations, not application-code changes.
 - No MCP adapter is implemented yet.
 - The web client refreshes state by polling every two seconds; SSE can replace polling in Phase 1 once the session/event model is stable.
 
@@ -2111,7 +2114,7 @@ Spec coverage for Phase 0:
 - Health check: covered by Tasks 2 and 7.
 - Docker Compose: covered by Task 7.
 - CI build: covered by Task 8.
-- Production environment: represented by Docker Compose and CI in Phase 0; public hosting configuration should be a separate deployment plan after this skeleton runs locally.
+- Production environment: represented by Docker Compose, CI, and the follow-up VPS public demo deployment path. Real production hardening remains outside Phase 0.
 - Dummy Agent job that updates session state: covered by Task 5.
 
 Self-review results:

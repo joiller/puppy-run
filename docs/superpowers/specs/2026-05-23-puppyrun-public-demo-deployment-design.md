@@ -6,6 +6,8 @@ Date: 2026-05-25
 
 PuppyRun Phase 0 has a working local deployable skeleton. The remaining Phase 0 gap is public URL verification. This design defines the smallest VPS deployment that proves the existing Phase 0 architecture online without starting Phase 1 Agent behavior.
 
+Closure update, 2026-05-27: the repository-scope Phase 0 deployment work is closed after the temporary raw-IP HTTP VPS demo passed public smoke verification on 2026-05-26. Domain DNS and HTTPS remain valid external deployment operations, but they are not repository code changes and should not block Phase 0 closure.
+
 The public demo must prove the same runtime loop that already works locally:
 
 ```text
@@ -24,7 +26,7 @@ The success criterion is not just that a static page loads. A reviewer must be a
 
 ### In Scope
 
-- Deploy the React/Vite web console to a public HTTPS URL on a VPS.
+- Deploy the React/Vite web console to a public URL on a VPS. HTTPS is expected for a domain-backed demo; a temporary raw-IP HTTP demo is acceptable for Phase 0 repository closure when the full worker loop is verified.
 - Deploy the FastAPI API as a private container on the same VPS.
 - Deploy the arq worker as a private background container on the same VPS.
 - Run PostgreSQL for decision sessions, agent runs, and events on the VPS.
@@ -32,7 +34,8 @@ The success criterion is not just that a static page loads. A reviewer must be a
 - Run Alembic migrations during API startup.
 - Configure production-like environment variables for API, worker, and web build.
 - Configure the reverse proxy so the public web console can call the API through same-origin paths.
-- Document public demo URLs and smoke-test steps in `README.md`.
+- Document smoke-test steps and public host configuration behavior in `README.md`.
+- Do not commit real public demo URLs, VPS IPs, SSH targets, or secrets to repository docs.
 - Preserve the local Docker Compose path for development.
 - Preserve application-level portability for later Kubernetes deployment.
 
@@ -314,8 +317,7 @@ The public deployment passes Phase 0 only when both the web page and the async w
 
 Update `README.md` with:
 
-- public web URL placeholder or final URL after deployment
-- public API health URL placeholder or final URL after deployment
+- public host configuration behavior without real public URLs
 - VPS topology
 - required environment variables
 - local development command
@@ -323,12 +325,12 @@ Update `README.md` with:
 - warning that public demo data is disposable
 - portability note for later Kubernetes deployment
 
-If final public URLs are not known before merging the deployment configuration, document the host variable and replace it after the first successful deployment.
+Real public URLs should remain in the VPS-local `deploy/vps/.env` file or private deployment notes. Do not replace placeholders in repository docs with the real host after deployment.
 
 ## 10. Risks And Mitigations
 
 - **VPS exposure risk:** only ports `80`, `443`, and SSH should be public; PostgreSQL, Redis, API, and worker stay on the Docker network.
-- **TLS or DNS failure:** use Caddy automatic HTTPS when a domain points to the VPS; validate DNS before public smoke testing.
+- **TLS or DNS failure:** use Caddy automatic HTTPS when a domain points to the VPS; validate DNS before domain-backed smoke testing. DNS and HTTPS setup is an external deployment operation, not an application-code change.
 - **Host resource pressure:** Phase 0 can run all services on one small VPS, but logs and memory should be checked after the first run.
 - **Migration/startup failure:** API startup command must run Alembic before `uvicorn`, and failures should stop deployment.
 - **Worker not running:** public verification must include dummy run completion, not just API health.

@@ -445,6 +445,8 @@ The app should be usable online as early as possible.
 
 Goal: create an online-ready architecture before implementing complex Agent behavior.
 
+Status update, 2026-05-27: Phase 0 is closed at the repository scope. The local skeleton is merged into `main`, the dummy worker loop has been verified locally, and the public demo loop has been verified through a temporary VPS raw-IP HTTP deployment. Domain DNS and HTTPS can be handled as external deployment operations; real public URLs are not committed to repository docs.
+
 Scope:
 
 - Frontend shell.
