@@ -8,11 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from puppyrun_api.config import get_settings
 from puppyrun_api.db import get_session
 from puppyrun_api.repositories import sessions as session_repo
+from puppyrun_api.repositories import workspace as workspace_repo
 from puppyrun_api.schemas import (
+    AgentEventResponse,
     AgentRunResponse,
+    CreateDecisionMessageRequest,
     CreateDecisionSessionRequest,
+    DecisionCandidateResponse,
+    DecisionCriterionResponse,
+    DecisionMessageResponse,
     DecisionSessionResponse,
+    EvidenceItemResponse,
+    RecommendationResponse,
     StartAgentRunResponse,
+    WorkspaceResponse,
 )
 from puppyrun_worker.main import redis_settings_from_url
 
@@ -46,6 +55,35 @@ async def get_session_by_id(
     return DecisionSessionResponse.model_validate(session)
 
 
+@router.get("/{session_id}/workspace", response_model=WorkspaceResponse)
+async def get_session_workspace(
+    session_id: UUID,
+    db: SessionDep,
+) -> WorkspaceResponse:
+    try:
+        workspace = await workspace_repo.get_workspace(db, session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="decision session not found") from exc
+    return _workspace_response(workspace)
+
+
+@router.post(
+    "/{session_id}/messages",
+    response_model=WorkspaceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_session_message(
+    session_id: UUID,
+    body: CreateDecisionMessageRequest,
+    db: SessionDep,
+) -> WorkspaceResponse:
+    try:
+        workspace = await workspace_repo.append_user_message(db, session_id, body.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="decision session not found") from exc
+    return _workspace_response(workspace)
+
+
 @router.post("/{session_id}/runs", response_model=StartAgentRunResponse, status_code=202)
 async def start_dummy_run(
     session_id: UUID,
@@ -68,4 +106,29 @@ async def start_dummy_run(
     return StartAgentRunResponse(
         session=DecisionSessionResponse.model_validate(session),
         run=AgentRunResponse.model_validate(run),
+    )
+
+
+def _workspace_response(workspace: workspace_repo.Workspace) -> WorkspaceResponse:
+    return WorkspaceResponse(
+        session=DecisionSessionResponse.model_validate(workspace.session),
+        messages=[
+            DecisionMessageResponse.model_validate(message) for message in workspace.messages
+        ],
+        candidates=[
+            DecisionCandidateResponse.model_validate(candidate)
+            for candidate in workspace.candidates
+        ],
+        criteria=[
+            DecisionCriterionResponse.model_validate(criterion) for criterion in workspace.criteria
+        ],
+        evidence_items=[
+            EvidenceItemResponse.model_validate(evidence_item)
+            for evidence_item in workspace.evidence_items
+        ],
+        recommendations=[
+            RecommendationResponse.model_validate(recommendation)
+            for recommendation in workspace.recommendations
+        ],
+        events=[AgentEventResponse.model_validate(event) for event in workspace.events],
     )

@@ -7,6 +7,7 @@ from puppyrun_api.models import (
     AgentEvent,
     AgentRun,
     AgentRunStatus,
+    DecisionMessage,
     DecisionSession,
     DecisionSessionStatus,
 )
@@ -17,9 +18,40 @@ def derive_title(prompt: str) -> str:
     return compact[:80] if len(compact) > 80 else compact
 
 
+def build_initial_decision_context(prompt: str) -> dict:
+    return {
+        "domain": "agent_framework_selection",
+        "original_prompt": prompt,
+        "clarification": {
+            "status": "pending",
+            "question": "Which constraints matter most for this Agent runtime decision?",
+        },
+    }
+
+
+def build_initial_clarification_message() -> str:
+    return (
+        "Before I compare the options, which constraints matter most: runtime language, "
+        "durable checkpoints, human approval steps, deployment shape, tracing, or team familiarity?"
+    )
+
+
 async def create_decision_session(db: AsyncSession, prompt: str) -> DecisionSession:
-    session = DecisionSession(title=derive_title(prompt), prompt=prompt)
+    session = DecisionSession(
+        title=derive_title(prompt),
+        prompt=prompt,
+        workflow_stage="clarifying",
+        decision_context=build_initial_decision_context(prompt),
+    )
     db.add(session)
+    await db.flush()
+    db.add(
+        DecisionMessage(
+            session_id=session.id,
+            role="assistant",
+            content=build_initial_clarification_message(),
+        )
+    )
     await db.commit()
     await db.refresh(session)
     return session

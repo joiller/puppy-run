@@ -46,3 +46,130 @@ async def test_create_session_rejects_short_prompt(session_client: AsyncClient) 
     response = await session_client.post("/api/v1/sessions", json={"prompt": "short"})
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_session_returns_initial_clarification(session_client: AsyncClient) -> None:
+    response = await session_client.post(
+        "/api/v1/sessions",
+        json={"prompt": "Compare LangGraph and CrewAI for a web Agent runtime."},
+    )
+
+    assert response.status_code == 201
+    created = response.json()
+    assert created["workflow_stage"] == "clarifying"
+    assert created["decision_context"]["domain"] == "agent_framework_selection"
+
+    workspace_response = await session_client.get(f"/api/v1/sessions/{created['id']}/workspace")
+    assert workspace_response.status_code == 200
+    workspace = workspace_response.json()
+    assert workspace["session"]["id"] == created["id"]
+    assert workspace["messages"][0]["role"] == "assistant"
+    assert "constraints matter most" in workspace["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_answer_clarification_marks_session_ready(session_client: AsyncClient) -> None:
+    create_response = await session_client.post(
+        "/api/v1/sessions",
+        json={"prompt": "Compare LangGraph and OpenAI Agents SDK for a web Agent runtime."},
+    )
+    session_id = create_response.json()["id"]
+
+    answer_response = await session_client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "content": (
+                "We need Python first, durable checkpoints, human approval steps, "
+                "and simple production tracing."
+            )
+        },
+    )
+
+    assert answer_response.status_code == 201
+    workspace = answer_response.json()
+    assert workspace["session"]["workflow_stage"] == "ready_for_research"
+    assert [message["role"] for message in workspace["messages"]] == ["assistant", "user"]
+
+
+@pytest.mark.asyncio
+async def test_get_missing_session_workspace_returns_404(session_client: AsyncClient) -> None:
+    response = await session_client.get(
+        "/api/v1/sessions/00000000-0000-0000-0000-000000000001/workspace"
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_post_missing_session_message_returns_404(session_client: AsyncClient) -> None:
+    response = await session_client.post(
+        "/api/v1/sessions/00000000-0000-0000-0000-000000000001/messages",
+        json={"content": "Durable checkpoints matter most."},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_post_session_message_rejects_too_short_content(
+    session_client: AsyncClient,
+) -> None:
+    create_response = await session_client.post(
+        "/api/v1/sessions",
+        json={"prompt": "Compare LangGraph and OpenAI Agents SDK for a web Agent runtime."},
+    )
+    session_id = create_response.json()["id"]
+
+    response = await session_client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"content": "x"},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_post_session_message_rejects_whitespace_only_content(
+    session_client: AsyncClient,
+) -> None:
+    create_response = await session_client.post(
+        "/api/v1/sessions",
+        json={"prompt": "Compare LangGraph and OpenAI Agents SDK for a web Agent runtime."},
+    )
+    session_id = create_response.json()["id"]
+
+    response = await session_client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"content": "  \n  "},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_workspace_persists_stripped_clarification_answer(
+    session_client: AsyncClient,
+) -> None:
+    create_response = await session_client.post(
+        "/api/v1/sessions",
+        json={"prompt": "Compare LangGraph and OpenAI Agents SDK for a web Agent runtime."},
+    )
+    session_id = create_response.json()["id"]
+
+    answer_response = await session_client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"content": "  Durable checkpoints and simple tracing. \n"},
+    )
+    assert answer_response.status_code == 201
+
+    workspace_response = await session_client.get(f"/api/v1/sessions/{session_id}/workspace")
+
+    assert workspace_response.status_code == 200
+    workspace = workspace_response.json()
+    assert workspace["session"]["workflow_stage"] == "ready_for_research"
+    assert workspace["messages"][1]["content"] == "Durable checkpoints and simple tracing."
+    assert (
+        workspace["session"]["decision_context"]["clarification"]["answer"]
+        == "Durable checkpoints and simple tracing."
+    )
