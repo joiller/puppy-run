@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://puppyrun:puppyrun@localhost:5432/puppyrun"
     redis_url: str = "redis://localhost:6379/0"
     cors_origins: list[AnyHttpUrl] = Field(default_factory=list)
+    github_token: str | None = None
+    github_api_base_url: str = "https://api.github.com"
 
     @property
     def sqlalchemy_database_url(self) -> str:
