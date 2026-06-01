@@ -5,6 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
 
+from puppyrun_agent.catalog import select_candidates
+from puppyrun_agent.clarification import (
+    build_initial_context,
+    build_initial_question,
+    update_context_with_answer,
+)
+from puppyrun_agent.criteria import generate_criteria
 from puppyrun_api.db import Base
 from puppyrun_api.models import (
     AgentEvent,
@@ -189,3 +196,95 @@ def test_phase1_model_foreign_keys_match_migration_ondelete() -> None:
     assert _ondelete(EvidenceItem, "criterion_id") == "SET NULL"
     assert _ondelete(Recommendation, "session_id") == "CASCADE"
     assert _ondelete(Recommendation, "recommended_candidate_id") == "SET NULL"
+
+
+def test_build_initial_context_detects_agent_framework_domain() -> None:
+    context = build_initial_context(
+        "Should I use CrewAI, LangGraph, or OpenAI Agents SDK for a web Agent runtime?"
+    )
+
+    assert context["domain"] == "agent_framework_selection"
+    assert context["mentioned_candidates"] == ["crewai", "langgraph", "openai_agents_sdk"]
+    assert context["clarification_turns"] == 0
+
+
+def test_build_initial_context_detects_constraints_and_language() -> None:
+    context = build_initial_context(
+        "Compare LangGraph and CrewAI with checkpoint state, human approval, "
+        "trace observability, and TypeScript support."
+    )
+
+    assert set(context["constraints"]) == {
+        "checkpointing",
+        "stateful_runtime",
+        "human_in_loop",
+        "observability",
+        "typescript",
+    }
+    assert context["language_preference"] == "typescript"
+
+
+def test_build_initial_question_is_specific_to_missing_constraints() -> None:
+    context = build_initial_context("Compare LangGraph and CrewAI for a web Agent runtime.")
+
+    question = build_initial_question(context)
+
+    assert "constraints matter most" in question
+    assert "checkpointing" in question
+    assert "human approval" in question
+
+
+def test_update_context_with_answer_merges_constraints_and_increments_turns() -> None:
+    context = {
+        "domain": "agent_framework_selection",
+        "mentioned_candidates": ["langgraph"],
+        "constraints": ["checkpointing"],
+        "language_preference": "typescript",
+        "clarification_turns": 0,
+    }
+
+    updated = update_context_with_answer(
+        context,
+        "We need Python support, human approval gates, and production tracing.",
+    )
+
+    assert set(updated["constraints"]) == {
+        "checkpointing",
+        "human_in_loop",
+        "observability",
+        "python",
+    }
+    assert updated["language_preference"] == "python"
+    assert updated["clarification_turns"] == 1
+
+
+def test_select_candidates_limits_phase1_to_three_candidates() -> None:
+    context = build_initial_context(
+        "Compare OpenAI Agents SDK, CrewAI, LangGraph, and AutoGen for a web Agent runtime."
+    )
+
+    candidates = select_candidates(context)
+
+    assert [candidate.slug for candidate in candidates] == [
+        "openai_agents_sdk",
+        "crewai",
+        "langgraph",
+    ]
+    assert [candidate.repo_full_name for candidate in candidates] == [
+        "openai/openai-agents-python",
+        "crewAIInc/crewAI",
+        "langchain-ai/langgraph",
+    ]
+
+
+def test_generate_criteria_weights_agent_runtime_needs() -> None:
+    context = {
+        "constraints": ["checkpointing", "human_in_loop", "observability"],
+        "language_preference": "python",
+    }
+
+    criteria = generate_criteria(context)
+
+    assert len(criteria) == 5
+    assert criteria[0].name == "Runtime control and state"
+    assert sum(criterion.weight for criterion in criteria) == 100
