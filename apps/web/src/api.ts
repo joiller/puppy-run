@@ -1,4 +1,4 @@
-import type { DecisionSession, StartAgentRunResponse } from "./types";
+import type { DecisionSession, StartAgentRunResponse, Workspace } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -24,6 +24,17 @@ export async function createSession(prompt: string): Promise<DecisionSession> {
   return request<DecisionSession>("/api/v1/sessions", {
     method: "POST",
     body: JSON.stringify({ prompt })
+  });
+}
+
+export async function getWorkspace(sessionId: string): Promise<Workspace> {
+  return request<Workspace>(`/api/v1/sessions/${sessionId}/workspace`);
+}
+
+export async function sendMessage(sessionId: string, content: string): Promise<Workspace> {
+  return request<Workspace>(`/api/v1/sessions/${sessionId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content })
   });
 }
 
