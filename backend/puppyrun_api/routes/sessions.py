@@ -85,7 +85,7 @@ async def create_session_message(
 
 
 @router.post("/{session_id}/runs", response_model=StartAgentRunResponse, status_code=202)
-async def start_dummy_run(
+async def start_agent_run(
     session_id: UUID,
     db: SessionDep,
 ) -> StartAgentRunResponse:
@@ -96,8 +96,10 @@ async def start_dummy_run(
     run = await session_repo.create_agent_run(db, session_id)
     redis = await create_pool(redis_settings_from_url(get_settings().redis_url))
     try:
-        job = await redis.enqueue_job("run_dummy_agent_job", str(run.id), _job_id=f"dummy:{run.id}")
-        run.job_id = job.job_id if job is not None else f"dummy:{run.id}"
+        job = await redis.enqueue_job(
+            "run_phase1_agent_job", str(run.id), _job_id=f"phase1:{run.id}"
+        )
+        run.job_id = job.job_id if job is not None else f"phase1:{run.id}"
     finally:
         await redis.close()
     await db.commit()

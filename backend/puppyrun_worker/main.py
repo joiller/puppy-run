@@ -1,7 +1,7 @@
 from arq.connections import RedisSettings
 
 from puppyrun_api.config import get_settings
-from puppyrun_worker.jobs import run_dummy_agent_job
+from puppyrun_worker.jobs import run_dummy_agent_job, run_phase1_agent_job
 
 
 def redis_settings_from_url(url: str) -> RedisSettings:
@@ -14,5 +14,5 @@ def redis_settings_from_url(url: str) -> RedisSettings:
 
 
 class WorkerSettings:
-    functions = [run_dummy_agent_job]
+    functions = [run_dummy_agent_job, run_phase1_agent_job]
     redis_settings = redis_settings_from_url(get_settings().redis_url)

@@ -2,13 +2,17 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from puppyrun_api.db import Base
-from puppyrun_api.models import DecisionSessionStatus
-from puppyrun_api.repositories.sessions import create_agent_run, create_decision_session
+from puppyrun_api.models import DecisionSession, DecisionSessionStatus
+from puppyrun_api.repositories.sessions import (
+    create_agent_run,
+    create_decision_session,
+)
+from puppyrun_api.repositories.workspace import append_user_message
 from puppyrun_worker import jobs
 
 
 @pytest.mark.asyncio
-async def test_dummy_agent_job_marks_session_completed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_phase1_agent_job_marks_session_completed(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -18,20 +22,32 @@ async def test_dummy_agent_job_marks_session_completed(monkeypatch: pytest.Monke
 
     async with maker() as db:
         session = await create_decision_session(
-            db, "Compare LangGraph and OpenAI Agents SDK for PuppyRun."
+            db,
+            "Compare LangGraph, OpenAI Agents SDK, and CrewAI for PuppyRun.",
+        )
+        await append_user_message(
+            db,
+            session.id,
+            "We need Python, checkpointing, human approval, and observability.",
         )
         run = await create_agent_run(db, session.id)
         run_id = run.id
         session_id = session.id
 
-    await jobs.run_dummy_agent_job({}, str(run_id))
-
-    async with maker() as db:
-        refreshed = await db.get(type(session), session_id)
+    async def fake_workflow(db, run_id_arg):
+        assert str(run_id_arg) == str(run_id)
+        refreshed = await db.get(DecisionSession, session_id)
         assert refreshed is not None
-        assert refreshed.status == DecisionSessionStatus.completed
-        assert refreshed.current_summary == (
-            "Phase 0 dummy Agent completed. Real research workflow is not enabled yet."
-        )
+        refreshed.status = DecisionSessionStatus.completed
+        refreshed.workflow_stage = "completed"
+        refreshed.current_summary = "Recommended: LangGraph."
+        await db.commit()
+        return "Recommended: LangGraph."
+
+    monkeypatch.setattr(jobs, "run_phase1_workflow", fake_workflow)
+
+    summary = await jobs.run_phase1_agent_job({}, str(run_id))
+
+    assert summary == "Recommended: LangGraph."
 
     await engine.dispose()

@@ -173,3 +173,37 @@ async def test_workspace_persists_stripped_clarification_answer(
         workspace["session"]["decision_context"]["clarification"]["answer"]
         == "Durable checkpoints and simple tracing."
     )
+
+
+@pytest.mark.asyncio
+async def test_start_run_enqueues_phase1_job(
+    session_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = await session_client.post(
+        "/api/v1/sessions",
+        json={"prompt": "Compare LangGraph and OpenAI Agents SDK for a web Agent runtime."},
+    )
+    session_id = response.json()["id"]
+
+    class FakeJob:
+        job_id = "phase1:test-job"
+
+    class FakeRedis:
+        async def enqueue_job(self, name: str, run_id: str, _job_id: str):
+            assert name == "run_phase1_agent_job"
+            assert _job_id.startswith("phase1:")
+            return FakeJob()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(settings):
+        return FakeRedis()
+
+    monkeypatch.setattr("puppyrun_api.routes.sessions.create_pool", fake_create_pool)
+
+    run_response = await session_client.post(f"/api/v1/sessions/{session_id}/runs")
+
+    assert run_response.status_code == 202
+    assert run_response.json()["run"]["job_id"] == "phase1:test-job"
