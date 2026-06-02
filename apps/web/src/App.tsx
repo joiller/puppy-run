@@ -48,6 +48,10 @@ export default function App() {
     return selectedIdRef.current === actionSessionId && responseSessionId === actionSessionId;
   }
 
+  function invalidateWorkspaceReads() {
+    workspaceRequestIdRef.current += 1;
+  }
+
   async function loadWorkspace(session: DecisionSession) {
     selectSession(session);
     const requestId = ++workspaceRequestIdRef.current;
@@ -111,6 +115,7 @@ export default function App() {
   async function handleRun() {
     if (!selected || !canRun) return;
     const actionSessionId = selected.id;
+    invalidateWorkspaceReads();
     setIsBusy(true);
     setError(null);
     try {
@@ -134,6 +139,7 @@ export default function App() {
     event.preventDefault();
     if (!selected || clarificationAnswer.trim().length < 2) return;
     const actionSessionId = selected.id;
+    invalidateWorkspaceReads();
     setIsBusy(true);
     setError(null);
     try {

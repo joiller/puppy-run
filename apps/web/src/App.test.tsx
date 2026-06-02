@@ -85,6 +85,10 @@ function getRunButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Run Phase 1 Agent" }) as HTMLButtonElement;
 }
 
+function getSendAnswerButton(): HTMLButtonElement {
+  return screen.getByRole("button", { name: "Send answer" }) as HTMLButtonElement;
+}
+
 function makeWorkspace(
   session: DecisionSession,
   extraMessages: Array<{ role: string; content: string }> = []
@@ -454,6 +458,134 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByText("Second run workspace marker")).toBeTruthy();
       expect(screen.queryByText("First run workspace marker")).toBeNull();
+    });
+  });
+
+  it("keeps a clarification response when an older same-session workspace load resolves later", async () => {
+    const clarifying = makeSession("created");
+    const ready: DecisionSession = {
+      ...clarifying,
+      workflow_stage: "ready_for_research"
+    };
+    const workspaceRequest = deferred<Workspace>();
+
+    listSessionsMock.mockImplementation(async () => [clarifying]);
+    getWorkspaceMock.mockImplementation(async (sessionId: string) => {
+      if (sessionId === clarifying.id) return workspaceRequest.promise;
+      throw new Error(`Unexpected workspace request: ${sessionId}`);
+    });
+    sendMessageMock.mockImplementation(async () =>
+      makeWorkspace(ready, [{ role: "assistant", content: "Ready workspace marker" }])
+    );
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    fireEvent.change(screen.getByLabelText("Clarification answer"), {
+      target: { value: "Python and checkpointing matter most." }
+    });
+    await waitFor(() => {
+      expect(getSendAnswerButton().disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Decision workspace")).getByText("ready_for_research"))
+        .toBeTruthy();
+      expect(screen.getByText("Ready workspace marker")).toBeTruthy();
+      expect(getRunButton().disabled).toBe(false);
+    });
+
+    await act(async () => {
+      workspaceRequest.resolve(
+        makeWorkspace(clarifying, [{ role: "assistant", content: "Stale workspace marker" }])
+      );
+      await workspaceRequest.promise;
+    });
+
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Decision workspace")).getByText("ready_for_research"))
+        .toBeTruthy();
+      expect(screen.getByText("Ready workspace marker")).toBeTruthy();
+      expect(screen.queryByText("Stale workspace marker")).toBeNull();
+      expect(getRunButton().disabled).toBe(false);
+    });
+  });
+
+  it("keeps a run response when an older same-session workspace load resolves before refresh", async () => {
+    const ready: DecisionSession = {
+      ...makeSession("created"),
+      workflow_stage: "ready_for_research"
+    };
+    const queued: DecisionSession = {
+      ...ready,
+      status: "queued",
+      workflow_stage: "queued"
+    };
+    const initialWorkspaceRequest = deferred<Workspace>();
+    const staleWorkspaceRequest = deferred<Workspace>();
+    const refreshSessionsRequest = deferred<DecisionSession[]>();
+    let workspaceRequestCount = 0;
+    let sessionListCount = 0;
+
+    listSessionsMock.mockImplementation(async () => {
+      sessionListCount += 1;
+      if (sessionListCount === 1) return [ready];
+      return refreshSessionsRequest.promise;
+    });
+    getWorkspaceMock.mockImplementation(async (sessionId: string) => {
+      if (sessionId !== ready.id) {
+        throw new Error(`Unexpected workspace request: ${sessionId}`);
+      }
+      workspaceRequestCount += 1;
+      if (workspaceRequestCount === 1) return initialWorkspaceRequest.promise;
+      if (workspaceRequestCount === 2) return staleWorkspaceRequest.promise;
+      return makeWorkspace(queued, [{ role: "assistant", content: "Queued workspace marker" }]);
+    });
+    startRunMock.mockImplementation(async () => makeRunResponse(queued));
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await act(async () => {
+      initialWorkspaceRequest.resolve(
+        makeWorkspace(ready, [{ role: "assistant", content: "Ready workspace marker" }])
+      );
+      await initialWorkspaceRequest.promise;
+    });
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Decision workspace")).getByText("ready_for_research"))
+        .toBeTruthy();
+      expect(getRunButton().disabled).toBe(false);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Phase 1 Agent" }));
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Decision workspace")).getByText("queued")).toBeTruthy();
+    });
+
+    await act(async () => {
+      staleWorkspaceRequest.resolve(
+        makeWorkspace(ready, [{ role: "assistant", content: "Stale run workspace marker" }])
+      );
+      await staleWorkspaceRequest.promise;
+    });
+
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Decision workspace")).getByText("queued")).toBeTruthy();
+      expect(screen.queryByText("Stale run workspace marker")).toBeNull();
+    });
+
+    await act(async () => {
+      refreshSessionsRequest.resolve([queued]);
+      await refreshSessionsRequest.promise;
     });
   });
 });
