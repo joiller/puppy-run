@@ -84,8 +84,9 @@ Manual browser acceptance:
 
 1. Open `http://localhost:5173`.
 2. Create a session.
-3. Click `Start dummy Agent run`.
-4. Without clicking `Refresh`, wait for polling to update both the session list and the `Run status` detail panel to `completed`.
+3. Answer the clarification prompt.
+4. Click `Run Phase 1 Agent`.
+5. Without clicking `Refresh`, wait for polling to update the selected session to `completed` and show the recommendation, evidence, and trace.
 
 Public URL status:
 
@@ -132,10 +133,11 @@ Public demo data is disposable. Anyone with the URL can create demo sessions, so
 
 1. Open the public web URL.
 2. Create a decision session.
-3. Click `Start dummy Agent run`.
-4. Do not click `Refresh`.
-5. Wait until the selected session detail panel shows `completed`.
-6. Open the public API health URL and confirm:
+3. Answer the clarification prompt.
+4. Click `Run Phase 1 Agent`.
+5. Do not click `Refresh`.
+6. Wait until the selected session shows `completed` with recommendation, evidence, and trace output.
+7. Open the public API health URL and confirm:
 
 ```json
 {"status":"ok","service":"puppyrun-api"}
