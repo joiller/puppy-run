@@ -4,14 +4,17 @@ PuppyRun is an agentic, evidence-grounded workbench for technical stack and arch
 
 The first demo workflow focuses on AI Agent technology stack selection. The first client is a web console, while the core decision workflow is designed to be reusable by future clients such as desktop, mobile, CLI, or IDE integrations.
 
-Phase 0 is closed at the repository scope: the local deployable skeleton and the
-temporary VPS public demo loop have both been verified. The next product work is
-Phase 1 planning and implementation for the first real Agent workflow.
+Phase 1 adds the first real online Agent workflow: a deterministic Agent-framework selection thin slice with clarification, candidate discovery, criteria generation, public GitHub repository analysis, a basic recommendation, and trace events.
+
+To increase GitHub API rate limits in a public deployment, set `PUPPYRUN_GITHUB_TOKEN` in the deployment environment. The token is optional for local smoke tests and must not be committed.
+
+Phase 0 remains closed at the repository scope: the local deployable skeleton and the temporary VPS public demo loop have both been verified.
 
 ## Design
 
 - [PuppyRun design spec](docs/superpowers/specs/2026-05-21-puppyrun-design.md)
 - [Phase 0 implementation plan](docs/superpowers/plans/2026-05-21-puppyrun-phase-0-plan.md)
+- [Phase 1 implementation plan](docs/superpowers/plans/2026-05-27-puppyrun-phase-1-plan.md)
 - [VPS public demo deployment design](docs/superpowers/specs/2026-05-23-puppyrun-public-demo-deployment-design.md)
 - [VPS public demo deployment plan](docs/superpowers/plans/2026-05-23-puppyrun-public-demo-deployment-plan.md)
 
