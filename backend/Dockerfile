@@ -10,6 +10,7 @@ COPY alembic.ini /app/alembic.ini
 COPY migrations /app/migrations
 COPY puppyrun_api /app/puppyrun_api
 COPY puppyrun_worker /app/puppyrun_worker
+COPY puppyrun_agent /app/puppyrun_agent
 
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
 
