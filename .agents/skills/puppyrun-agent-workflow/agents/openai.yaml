@@ -1,0 +1,4 @@
+interface:
+  display_name: "PuppyRun Agent Workflow"
+  short_description: "Scoped PuppyRun handoffs, reviews, unblockers, and verification"
+  default_prompt: "Use this skill for PuppyRun scoped task handoffs, read-only reviews, narrow unblockers, and accepted-debt-aware verification."

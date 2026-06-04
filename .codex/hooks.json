@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/post_tool_use_diff_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking diff for private deployment details"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/stop_report_reminder.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking final report reminders"
+          }
+        ]
+      }
+    ]
+  }
+}

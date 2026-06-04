@@ -15,8 +15,19 @@ Phase 0 remains closed at the repository scope: the local deployable skeleton an
 - [PuppyRun design spec](docs/superpowers/specs/2026-05-21-puppyrun-design.md)
 - [Phase 0 implementation plan](docs/superpowers/plans/2026-05-21-puppyrun-phase-0-plan.md)
 - [Phase 1 implementation plan](docs/superpowers/plans/2026-05-27-puppyrun-phase-1-plan.md)
+- [Accepted debt](docs/accepted-debt.md)
 - [VPS public demo deployment design](docs/superpowers/specs/2026-05-23-puppyrun-public-demo-deployment-design.md)
 - [VPS public demo deployment plan](docs/superpowers/plans/2026-05-23-puppyrun-public-demo-deployment-plan.md)
+
+## AI Agent Operating Docs
+
+- [Repository agent instructions](AGENTS.md)
+- [Repo-local PuppyRun workflow skill](.agents/skills/puppyrun-agent-workflow/SKILL.md)
+- [Repo-local Codex hooks](.codex/hooks.json)
+- [Implementation controller prompt](docs/ai-prompts/implementation-controller.md)
+- [Read-only reviewer prompt](docs/ai-prompts/read-only-reviewer.md)
+- [Narrow unblocker prompt](docs/ai-prompts/narrow-unblocker.md)
+- [Task contract snippet](docs/ai-prompts/task-contract.md)
 
 ## Naming
 
