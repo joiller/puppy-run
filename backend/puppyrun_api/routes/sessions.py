@@ -21,6 +21,7 @@ from puppyrun_api.schemas import (
     DecisionVersionResponse,
     EvidenceItemResponse,
     GapAnalysisResponse,
+    Phase2DraftRequest,
     Phase2DraftResponse,
     RecommendationResponse,
     ScoreCellResponse,
@@ -84,6 +85,25 @@ async def create_session_message(
 ) -> WorkspaceResponse:
     try:
         workspace = await workspace_repo.append_user_message(db, session_id, body.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="decision session not found") from exc
+    return _workspace_response(workspace)
+
+
+@router.patch("/{session_id}/draft", response_model=WorkspaceResponse)
+async def update_session_draft(
+    session_id: UUID,
+    body: Phase2DraftRequest,
+    db: SessionDep,
+) -> WorkspaceResponse:
+    try:
+        workspace = await workspace_repo.update_phase2_draft(
+            db,
+            session_id,
+            body.model_dump(mode="json"),
+        )
+    except workspace_repo.Phase2DraftConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="decision session not found") from exc
     return _workspace_response(workspace)

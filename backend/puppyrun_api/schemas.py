@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints
@@ -30,6 +30,67 @@ class CreateDecisionMessageRequest(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, min_length=2, max_length=4000),
     ]
+
+
+CandidateSlug = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=2, max_length=80),
+]
+DraftReason = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=3, max_length=400),
+]
+RepoFullName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=3,
+        max_length=200,
+        pattern=r"^[^/\s]+/[^/\s]+$",
+    ),
+]
+
+
+class CandidateOverrideRequest(BaseModel):
+    action: Literal["include", "exclude", "must_include", "must_exclude", "lock"]
+    reason: DraftReason
+
+
+class CustomCandidateRequest(BaseModel):
+    name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=2, max_length=120),
+    ]
+    slug: CandidateSlug
+    repo_full_name: RepoFullName
+    reason: DraftReason
+
+
+class ConstraintOverrideRequest(BaseModel):
+    enabled: bool = True
+    reason: DraftReason
+
+
+class WeightOverrideRequest(BaseModel):
+    weight: int = Field(ge=0, le=100)
+    reason: DraftReason
+
+
+class Phase2DraftRequest(BaseModel):
+    source_version_id: UUID | None = None
+    candidate_overrides: dict[CandidateSlug, CandidateOverrideRequest] = Field(
+        default_factory=dict
+    )
+    custom_candidates: dict[CandidateSlug, CustomCandidateRequest] = Field(
+        default_factory=dict
+    )
+    must_include_constraints: dict[CandidateSlug, ConstraintOverrideRequest] = Field(
+        default_factory=dict
+    )
+    must_exclude_constraints: dict[CandidateSlug, ConstraintOverrideRequest] = Field(
+        default_factory=dict
+    )
+    weight_overrides: dict[str, WeightOverrideRequest] = Field(default_factory=dict)
 
 
 class DecisionMessageResponse(BaseModel):
@@ -145,6 +206,7 @@ class Phase2DraftResponse(BaseModel):
 
 class GapAnalysisResponse(BaseModel):
     requires_research: bool = False
+    requires_github_fetch: bool = False
     score_only: bool = False
     changed_candidates: list[str] = Field(default_factory=list)
     changed_constraints: list[str] = Field(default_factory=list)

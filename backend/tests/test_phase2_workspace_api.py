@@ -8,6 +8,18 @@ from puppyrun_api.main import create_app
 from puppyrun_api.repositories.sessions import create_decision_session
 
 
+def _completed_version(session_id):
+    return models.DecisionVersion(
+        session_id=session_id,
+        version_number=1,
+        label="Initial recommendation",
+        status="completed",
+        change_summary={"kind": "initial"},
+        gap_analysis={"items": []},
+        adr="Initial ADR.",
+    )
+
+
 @pytest.fixture
 async def phase2_client():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -292,3 +304,143 @@ async def test_workspace_without_versions_remains_readable(phase2_client) -> Non
     assert [recommendation["summary"] for recommendation in workspace["recommendations"]] == [
         "Recommended: LangGraph."
     ]
+
+
+@pytest.mark.asyncio
+async def test_patch_draft_returns_gap_analysis_before_rerun(phase2_client) -> None:
+    client, maker = phase2_client
+    async with maker() as db:
+        session = await create_decision_session(
+            db,
+            "Compare LangGraph and CrewAI for a Python Agent runtime.",
+        )
+        version = _completed_version(session.id)
+        db.add(version)
+        await db.flush()
+        langgraph = models.DecisionCandidate(
+            session_id=session.id,
+            decision_version_id=version.id,
+            name="LangGraph",
+            slug="langgraph",
+            repo_full_name="langchain-ai/langgraph",
+            include_reason="Baseline candidate.",
+            score=91,
+        )
+        crewai = models.DecisionCandidate(
+            session_id=session.id,
+            decision_version_id=version.id,
+            name="CrewAI",
+            slug="crewai",
+            repo_full_name="crewAIInc/crewAI",
+            include_reason="Baseline candidate.",
+            score=70,
+        )
+        runtime = models.DecisionCriterion(
+            session_id=session.id,
+            decision_version_id=version.id,
+            name="Runtime control and state",
+            weight=30,
+            rationale="State matters.",
+            evidence_needed="Repository evidence.",
+        )
+        db.add_all([langgraph, crewai, runtime])
+        await db.flush()
+        db.add(
+            models.EvidenceItem(
+                session_id=session.id,
+                decision_version_id=version.id,
+                candidate_id=langgraph.id,
+                criterion_id=None,
+                source_type="github_repo",
+                source_url="https://github.com/langchain-ai/langgraph",
+                title="LangGraph repository",
+                summary="Existing evidence.",
+                credibility="high",
+                payload={"full_name": "langchain-ai/langgraph"},
+            )
+        )
+        await db.commit()
+        session_id = session.id
+        source_version_id = version.id
+
+    response = await client.patch(
+        f"/api/v1/sessions/{session_id}/draft",
+        json={
+            "source_version_id": str(source_version_id),
+            "candidate_overrides": {
+                "crewai": {
+                    "action": "must_exclude",
+                    "reason": "Team does not want role-based orchestration.",
+                }
+            },
+            "custom_candidates": {
+                "autogen": {
+                    "name": "  AutoGen  ",
+                    "slug": " autogen ",
+                    "repo_full_name": " microsoft/autogen ",
+                    "reason": "Team asked to compare AutoGen.",
+                }
+            },
+            "must_include_constraints": {
+                "checkpointing": {
+                    "enabled": True,
+                    "reason": "Checkpointing is mandatory.",
+                }
+            },
+            "must_exclude_constraints": {
+                "typescript": {
+                    "enabled": True,
+                    "reason": "Team wants Python-first tooling.",
+                }
+            },
+            "weight_overrides": {
+                "Runtime control and state": {
+                    "weight": 45,
+                    "reason": "Recovery matters most.",
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    workspace = response.json()
+    assert workspace["session"]["workflow_stage"] == "context_changed"
+    assert workspace["draft"]["source_version_id"] == str(source_version_id)
+    assert workspace["draft"]["custom_candidates"]["autogen"]["repo_full_name"] == (
+        "microsoft/autogen"
+    )
+    assert workspace["draft"]["candidate_overrides"]["crewai"]["action"] == "must_exclude"
+
+    gap_analysis = workspace["gap_analysis"]
+    assert gap_analysis["requires_research"] is True
+    assert gap_analysis["requires_github_fetch"] is True
+    assert gap_analysis["score_only"] is False
+    assert gap_analysis["changed_candidates"] == ["autogen", "crewai"]
+    assert gap_analysis["changed_constraints"] == ["checkpointing", "typescript"]
+    assert gap_analysis["changed_weights"] == ["Runtime control and state"]
+    assert gap_analysis["research_tasks"] == [
+        {
+            "candidate_slug": "autogen",
+            "repo_full_name": "microsoft/autogen",
+            "reason": "missing_github_evidence",
+        }
+    ]
+    assert [candidate["slug"] for candidate in workspace["candidates"]] == [
+        "langgraph",
+        "crewai",
+    ]
+
+    async with maker() as db:
+        stored = await db.get(models.DecisionSession, session_id)
+        assert stored is not None
+        assert stored.workflow_stage == "context_changed"
+        assert stored.decision_context["phase2_draft"]["custom_candidates"]["autogen"][
+            "repo_full_name"
+        ] == "microsoft/autogen"
+        assert stored.decision_context["phase2_gap_analysis"]["research_tasks"] == [
+            {
+                "candidate_slug": "autogen",
+                "repo_full_name": "microsoft/autogen",
+                "reason": "missing_github_evidence",
+            }
+        ]
