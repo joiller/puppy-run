@@ -136,6 +136,14 @@ For browser-facing work, verify the actual browser flow in addition to tests and
 - Repo docs may describe topology, verification steps, placeholders, and environment variable names.
 - Real VPS details belong in VPS-local env files or private notes, not in committed docs.
 
+## Resume and Interview Highlights
+
+- Maintain resume-worthy project highlights in `docs/resume-highlights.md`.
+- When a task produces a shipped, verified, or clearly explainable engineering decision that would be useful for resumes or interviews, add or update a concise entry in that document.
+- Record only evidence-backed claims: include the feature or decision, why it is technically meaningful, what was verified, and the commit, file, or command evidence that supports it.
+- Do not describe planned work as completed work. If an item is only a future talking point, label it as planned or pending verification.
+- Keep secrets, real hosts, raw IPs, SSH targets, tokens, credentials, and private operational details out of resume and interview notes.
+
 ## Repo Hooks
 
 This repository includes lightweight Codex hooks under `.codex/hooks.json`.
