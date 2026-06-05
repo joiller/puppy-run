@@ -18,8 +18,12 @@ from puppyrun_api.schemas import (
     DecisionCriterionResponse,
     DecisionMessageResponse,
     DecisionSessionResponse,
+    DecisionVersionResponse,
     EvidenceItemResponse,
+    GapAnalysisResponse,
+    Phase2DraftResponse,
     RecommendationResponse,
+    ScoreCellResponse,
     StartAgentRunResponse,
     WorkspaceResponse,
 )
@@ -59,9 +63,10 @@ async def get_session_by_id(
 async def get_session_workspace(
     session_id: UUID,
     db: SessionDep,
+    version_id: UUID | None = None,
 ) -> WorkspaceResponse:
     try:
-        workspace = await workspace_repo.get_workspace(db, session_id)
+        workspace = await workspace_repo.get_workspace(db, session_id, version_id=version_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="decision session not found") from exc
     return _workspace_response(workspace)
@@ -117,6 +122,16 @@ def _workspace_response(workspace: workspace_repo.Workspace) -> WorkspaceRespons
         messages=[
             DecisionMessageResponse.model_validate(message) for message in workspace.messages
         ],
+        versions=[
+            DecisionVersionResponse.model_validate(version) for version in workspace.versions
+        ],
+        active_version=(
+            DecisionVersionResponse.model_validate(workspace.active_version)
+            if workspace.active_version is not None
+            else None
+        ),
+        draft=Phase2DraftResponse.model_validate(workspace.draft),
+        gap_analysis=GapAnalysisResponse.model_validate(workspace.gap_analysis),
         candidates=[
             DecisionCandidateResponse.model_validate(candidate)
             for candidate in workspace.candidates
@@ -127,6 +142,9 @@ def _workspace_response(workspace: workspace_repo.Workspace) -> WorkspaceRespons
         evidence_items=[
             EvidenceItemResponse.model_validate(evidence_item)
             for evidence_item in workspace.evidence_items
+        ],
+        score_cells=[
+            ScoreCellResponse.model_validate(score_cell) for score_cell in workspace.score_cells
         ],
         recommendations=[
             RecommendationResponse.model_validate(recommendation)
