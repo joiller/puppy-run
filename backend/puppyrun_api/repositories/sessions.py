@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from puppyrun_api.models import (
@@ -10,7 +10,13 @@ from puppyrun_api.models import (
     DecisionMessage,
     DecisionSession,
     DecisionSessionStatus,
+    DecisionVersion,
+    DecisionVersionStatus,
 )
+
+
+class Phase2VersionConflictError(ValueError):
+    pass
 
 
 def derive_title(prompt: str) -> str:
@@ -77,6 +83,48 @@ async def create_agent_run(db: AsyncSession, session_id: UUID) -> AgentRun:
     return run
 
 
+async def create_phase2_version_run(
+    db: AsyncSession,
+    session_id: UUID,
+) -> tuple[AgentRun, DecisionVersion]:
+    session = await db.get(DecisionSession, session_id)
+    if session is None:
+        raise ValueError(f"decision session not found: {session_id}")
+
+    draft = _phase2_draft(session.decision_context)
+    if draft is None or not _draft_has_changes(draft):
+        raise Phase2VersionConflictError("no phase2 draft changes found")
+
+    source_version = await _completed_source_version(db, session_id, draft.get("source_version_id"))
+    if source_version is None:
+        raise Phase2VersionConflictError("no completed source version found")
+
+    run = AgentRun(session_id=session_id, status=AgentRunStatus.queued)
+    db.add(run)
+    await db.flush()
+
+    version = DecisionVersion(
+        session_id=session_id,
+        version_number=await _next_version_number(db, session_id),
+        label="Phase 2 targeted revision",
+        status=DecisionVersionStatus.queued,
+        source_version_id=source_version.id,
+        change_summary={
+            "kind": "phase2_targeted",
+            "agent_run_id": str(run.id),
+            "source_version_id": str(source_version.id),
+        },
+        gap_analysis=_phase2_gap_analysis(session.decision_context),
+    )
+    db.add(version)
+    session.status = DecisionSessionStatus.queued
+    session.workflow_stage = "queued"
+    await db.commit()
+    await db.refresh(run)
+    await db.refresh(version)
+    return run, version
+
+
 async def mark_run_started(db: AsyncSession, run_id: UUID) -> None:
     run = await db.get(AgentRun, run_id)
     if run is None:
@@ -107,3 +155,52 @@ async def mark_run_completed(db: AsyncSession, run_id: UUID, summary: str) -> No
         )
     )
     await db.commit()
+
+
+def _phase2_draft(context: dict | None) -> dict | None:
+    draft = context.get("phase2_draft") if isinstance(context, dict) else None
+    return draft if isinstance(draft, dict) else None
+
+
+def _phase2_gap_analysis(context: dict | None) -> dict:
+    gap_analysis = context.get("phase2_gap_analysis") if isinstance(context, dict) else None
+    return dict(gap_analysis) if isinstance(gap_analysis, dict) else {}
+
+
+def _draft_has_changes(draft: dict) -> bool:
+    return any(
+        bool(draft.get(key))
+        for key in (
+            "candidate_overrides",
+            "custom_candidates",
+            "must_include_constraints",
+            "must_exclude_constraints",
+            "weight_overrides",
+        )
+    )
+
+
+async def _completed_source_version(
+    db: AsyncSession,
+    session_id: UUID,
+    source_version_id: str | UUID | None,
+) -> DecisionVersion | None:
+    statement = (
+        select(DecisionVersion)
+        .where(DecisionVersion.session_id == session_id)
+        .where(DecisionVersion.status == DecisionVersionStatus.completed)
+    )
+    if source_version_id is not None:
+        statement = statement.where(DecisionVersion.id == UUID(str(source_version_id)))
+    else:
+        statement = statement.order_by(DecisionVersion.version_number.desc()).limit(1)
+    return (await db.execute(statement)).scalar_one_or_none()
+
+
+async def _next_version_number(db: AsyncSession, session_id: UUID) -> int:
+    current_max = await db.scalar(
+        select(func.max(DecisionVersion.version_number)).where(
+            DecisionVersion.session_id == session_id
+        )
+    )
+    return int(current_max or 0) + 1

@@ -136,6 +136,38 @@ async def start_agent_run(
     )
 
 
+@router.post("/{session_id}/versions", response_model=StartAgentRunResponse, status_code=202)
+async def create_phase2_version(
+    session_id: UUID,
+    db: SessionDep,
+) -> StartAgentRunResponse:
+    try:
+        run, _version = await session_repo.create_phase2_version_run(db, session_id)
+    except session_repo.Phase2VersionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="decision session not found") from exc
+
+    redis = await create_pool(redis_settings_from_url(get_settings().redis_url))
+    try:
+        job = await redis.enqueue_job(
+            "run_phase2_agent_job", str(run.id), _job_id=f"phase2:{run.id}"
+        )
+        run.job_id = job.job_id if job is not None else f"phase2:{run.id}"
+    finally:
+        await redis.close()
+    await db.commit()
+    session = await session_repo.get_decision_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="decision session not found")
+    await db.refresh(run)
+    await db.refresh(session)
+    return StartAgentRunResponse(
+        session=DecisionSessionResponse.model_validate(session),
+        run=AgentRunResponse.model_validate(run),
+    )
+
+
 def _workspace_response(workspace: workspace_repo.Workspace) -> WorkspaceResponse:
     return WorkspaceResponse(
         session=DecisionSessionResponse.model_validate(workspace.session),

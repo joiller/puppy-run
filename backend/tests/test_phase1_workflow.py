@@ -13,6 +13,8 @@ from puppyrun_api.models import (
     DecisionCriterion,
     DecisionSession,
     DecisionSessionStatus,
+    DecisionVersion,
+    DecisionVersionStatus,
     EvidenceItem,
     Recommendation,
 )
@@ -164,6 +166,131 @@ async def test_phase1_workflow_persists_candidates_evidence_and_recommendation()
             "github_repo_analyzed",
             "recommendation_generated",
         ]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase1_completed_run_creates_version_one() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as db:
+        session = await create_decision_session(
+            db,
+            "Compare LangGraph, OpenAI Agents SDK, and CrewAI for a web Agent runtime.",
+        )
+        await append_user_message(
+            db,
+            session.id,
+            "We need Python, checkpointing, human approval, and observability.",
+        )
+        run = await create_agent_run(db, session.id)
+        run_id = run.id
+        session_id = session.id
+
+    transport = httpx.MockTransport(github_handler)
+    async with maker() as db:
+        await run_phase1_workflow(db, run_id, github_transport=transport)
+
+    async with maker() as db:
+        versions = (await db.execute(select(DecisionVersion))).scalars().all()
+        assert len(versions) == 1
+        version = versions[0]
+        assert version.session_id == session_id
+        assert version.version_number == 1
+        assert version.status == DecisionVersionStatus.completed
+        assert version.source_version_id is None
+        assert version.adr
+        assert version.completed_at is not None
+
+        candidates = (await db.execute(select(DecisionCandidate))).scalars().all()
+        criteria = (await db.execute(select(DecisionCriterion))).scalars().all()
+        evidence_items = (await db.execute(select(EvidenceItem))).scalars().all()
+        recommendations = (await db.execute(select(Recommendation))).scalars().all()
+
+        assert candidates
+        assert criteria
+        assert evidence_items
+        assert len(recommendations) == 1
+        assert {candidate.decision_version_id for candidate in candidates} == {version.id}
+        assert {criterion.decision_version_id for criterion in criteria} == {version.id}
+        assert {evidence.decision_version_id for evidence in evidence_items} == {version.id}
+        assert recommendations[0].decision_version_id == version.id
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase1_rerun_preserves_completed_version_rows() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as db:
+        session = await create_decision_session(
+            db,
+            "Compare LangGraph, OpenAI Agents SDK, and CrewAI for a web Agent runtime.",
+        )
+        await append_user_message(
+            db,
+            session.id,
+            "We need Python, checkpointing, human approval, and observability.",
+        )
+        first_run = await create_agent_run(db, session.id)
+        first_run_id = first_run.id
+        session_id = session.id
+
+    transport = httpx.MockTransport(github_handler)
+    async with maker() as db:
+        await run_phase1_workflow(db, first_run_id, github_transport=transport)
+
+    async with maker() as db:
+        version_one = (await db.execute(select(DecisionVersion))).scalar_one()
+        version_one_id = version_one.id
+        version_one_candidate_ids = set(
+            (
+                await db.execute(
+                    select(DecisionCandidate.id).where(
+                        DecisionCandidate.decision_version_id == version_one_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        second_run = await create_agent_run(db, session_id)
+        second_run_id = second_run.id
+
+    async with maker() as db:
+        await run_phase1_workflow(db, second_run_id, github_transport=transport)
+
+    async with maker() as db:
+        versions = (
+            await db.execute(
+                select(DecisionVersion).order_by(DecisionVersion.version_number)
+            )
+        ).scalars().all()
+        assert [version.version_number for version in versions] == [1, 2]
+        assert versions[0].status == DecisionVersionStatus.completed
+        assert versions[1].status == DecisionVersionStatus.completed
+
+        preserved_candidate_ids = set(
+            (
+                await db.execute(
+                    select(DecisionCandidate.id).where(
+                        DecisionCandidate.decision_version_id == version_one_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert preserved_candidate_ids == version_one_candidate_ids
+        assert len(preserved_candidate_ids) == 3
 
     await engine.dispose()
 
