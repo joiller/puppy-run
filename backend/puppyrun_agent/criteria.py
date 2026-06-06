@@ -7,6 +7,8 @@ class CriterionProfile:
     weight: int
     rationale: str
     evidence_needed: str
+    is_locked: bool = False
+    phase2_weight_reason: str = ""
 
 
 def generate_criteria(context: dict) -> list[CriterionProfile]:
@@ -59,3 +61,31 @@ def generate_criteria(context: dict) -> list[CriterionProfile]:
             ),
         ),
     ]
+
+
+def apply_weight_overrides(
+    criteria: list[CriterionProfile],
+    overrides: dict,
+) -> list[CriterionProfile]:
+    adjusted = []
+    for criterion in criteria:
+        override = overrides.get(criterion.name)
+        if not isinstance(override, dict):
+            adjusted.append(criterion)
+            continue
+
+        adjusted.append(
+            CriterionProfile(
+                name=criterion.name,
+                weight=int(override.get("weight", criterion.weight)),
+                rationale=criterion.rationale,
+                evidence_needed=criterion.evidence_needed,
+                is_locked=True,
+                phase2_weight_reason=_clean_text(override.get("reason")),
+            )
+        )
+    return adjusted
+
+
+def _clean_text(value: object) -> str:
+    return str(value).strip() if value is not None else ""

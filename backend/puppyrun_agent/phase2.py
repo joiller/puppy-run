@@ -1,7 +1,15 @@
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from puppyrun_agent.catalog import CANDIDATE_REGISTRY, CandidateProfile, select_candidates
+from puppyrun_agent.catalog import (
+    CandidateProfile,
+    custom_candidate_from_draft,
+    registry_by_slug,
+    select_candidates,
+)
+from puppyrun_agent.criteria import CriterionProfile, apply_weight_overrides
+from puppyrun_agent.github_client import RepositorySummary
+from puppyrun_agent.recommendation import score_candidate_for_criterion
 
 EMPTY_DRAFT: dict[str, Any] = {
     "source_version_id": None,
@@ -72,7 +80,7 @@ def build_phase2_candidates(context: Mapping[str, Any], draft: Mapping[str, Any]
             continue
 
         if normalized_slug not in candidates_by_slug:
-            registry_candidate = _registry_by_slug().get(normalized_slug)
+            registry_candidate = registry_by_slug().get(normalized_slug)
             if registry_candidate is not None:
                 candidates_by_slug[normalized_slug] = _candidate_to_dict(registry_candidate)
                 candidate_order.append(normalized_slug)
@@ -104,17 +112,11 @@ def apply_phase2_criteria(
     context: Mapping[str, Any],
 ) -> list[dict]:
     _ = context
-    overrides = _as_mapping(draft.get("weight_overrides"))
-    adjusted = []
-    for criterion in criteria:
-        criterion_dict = _criterion_to_dict(criterion)
-        override = overrides.get(criterion_dict["name"])
-        if isinstance(override, Mapping):
-            criterion_dict["weight"] = int(override.get("weight", criterion_dict["weight"]))
-            criterion_dict["is_locked"] = True
-            criterion_dict["phase2_weight_reason"] = _clean_text(override.get("reason"))
-        adjusted.append(criterion_dict)
-    return adjusted
+    adjusted = apply_weight_overrides(
+        [_criterion_profile(criterion) for criterion in criteria],
+        dict(_as_mapping(draft.get("weight_overrides"))),
+    )
+    return [_criterion_to_dict(criterion) for criterion in adjusted]
 
 
 def build_research_plan(
@@ -192,6 +194,69 @@ def build_gap_analysis(
     }
 
 
+def build_score_cells(
+    candidates: Iterable[Any],
+    criteria: Iterable[Any],
+    repos: Mapping[str, RepositorySummary],
+    evidence_by_candidate: Mapping[str, list[dict]],
+) -> list[dict]:
+    cells = []
+    for candidate in candidates:
+        scoring_candidate = _scoring_candidate(candidate)
+        candidate_slug = _normalize_slug(_value(scoring_candidate, "slug"))
+        repo = _repo_for_candidate(scoring_candidate, repos)
+        evidence_refs = _evidence_refs(candidate_slug, repo, evidence_by_candidate)
+        for criterion in criteria:
+            criterion_profile = _criterion_profile(criterion)
+            score = score_candidate_for_criterion(
+                scoring_candidate,
+                criterion_profile,
+                repo,
+                {},
+            )
+            cells.append(
+                {
+                    "candidate_slug": candidate_slug,
+                    "criterion_name": criterion_profile.name,
+                    "status": score["status"],
+                    "score": score["score"],
+                    "explanation": score["explanation"],
+                    "evidence_refs": evidence_refs,
+                }
+            )
+    return cells
+
+
+def build_adr(
+    version_number: int,
+    summary: str,
+    rationale: Mapping[str, Any],
+    gap_analysis: Mapping[str, Any],
+    score_cells: Iterable[Mapping[str, Any]],
+) -> dict:
+    title = f"ADR v{version_number}: {summary}"
+    ranked_candidates = _as_list(rationale.get("ranked_candidates"))
+    evidence_links = _adr_evidence_links(score_cells)
+    body = "\n\n".join(
+        [
+            "## Context\n"
+            f"Version {version_number} reflects Phase 2 draft changes. "
+            f"Changed candidates: {_join_or_none(gap_analysis.get('changed_candidates'))}. "
+            f"Changed constraints: {_join_or_none(gap_analysis.get('changed_constraints'))}. "
+            f"Changed weights: {_join_or_none(gap_analysis.get('changed_weights'))}.",
+            f"## Decision\n{summary}",
+            "## Options\n" + _adr_options(ranked_candidates),
+            "## Rationale\n" + _adr_rationale(ranked_candidates),
+            "## Tradeoffs\n"
+            "The decision favors the weighted Phase 2 criteria while preserving the "
+            "ranked alternatives for review.",
+            "## Risks\n" + _adr_risks(gap_analysis),
+            "## Evidence links\n" + _adr_evidence_body(evidence_links),
+        ]
+    )
+    return {"title": title, "body": body}
+
+
 def _normalize_candidate_overrides(raw: Any) -> dict:
     normalized = {}
     for slug, payload in _as_mapping(raw).items():
@@ -255,7 +320,7 @@ def _baseline_candidates(context: Mapping[str, Any]) -> list[Any]:
 
     mentioned = [_normalize_slug(slug) for slug in _as_list(context.get("mentioned_candidates"))]
     if mentioned:
-        registry = _registry_by_slug()
+        registry = registry_by_slug()
         return [registry[slug] for slug in mentioned if slug in registry]
 
     return list(select_candidates(dict(context)))
@@ -282,13 +347,13 @@ def _candidate_to_dict(candidate: Any) -> dict:
 
 
 def _custom_candidate_to_dict(slug: str, payload: Any) -> dict:
-    normalized_slug = _normalize_slug(_value(payload, "slug") or slug)
-    reason = _clean_text(_value(payload, "reason"))
+    candidate = custom_candidate_from_draft(slug, dict(_as_mapping(payload)))
     return {
-        "name": _clean_text(_value(payload, "name")),
-        "slug": normalized_slug,
-        "repo_full_name": _clean_text(_value(payload, "repo_full_name")),
-        "include_reason": reason,
+        "name": candidate.name,
+        "slug": candidate.slug,
+        "repo_full_name": candidate.repo_full_name,
+        "capabilities": candidate.capabilities,
+        "include_reason": candidate.include_reason,
         "selection_state": "included",
         "is_locked": False,
         "is_custom": True,
@@ -316,7 +381,112 @@ def _criterion_to_dict(criterion: Any) -> dict:
         "rationale": _clean_text(_value(criterion, "rationale")),
         "evidence_needed": _clean_text(_value(criterion, "evidence_needed")),
         "is_locked": bool(_value(criterion, "is_locked", False)),
+        "phase2_weight_reason": _clean_text(_value(criterion, "phase2_weight_reason")),
     }
+
+
+def _criterion_profile(criterion: Any) -> CriterionProfile:
+    return CriterionProfile(
+        name=_clean_text(_value(criterion, "name")),
+        weight=int(_value(criterion, "weight")),
+        rationale=_clean_text(_value(criterion, "rationale")),
+        evidence_needed=_clean_text(_value(criterion, "evidence_needed")),
+        is_locked=bool(_value(criterion, "is_locked", False)),
+        phase2_weight_reason=_clean_text(_value(criterion, "phase2_weight_reason")),
+    )
+
+
+def _scoring_candidate(candidate: Any) -> Any:
+    capabilities = _value(candidate, "capabilities", None)
+    if capabilities:
+        return candidate
+    return registry_by_slug().get(_normalize_slug(_value(candidate, "slug")), candidate)
+
+
+def _repo_for_candidate(
+    candidate: Any,
+    repos: Mapping[str, RepositorySummary],
+) -> RepositorySummary | None:
+    candidate_slug = _normalize_slug(_value(candidate, "slug"))
+    repo_full_name = _clean_text(_value(candidate, "repo_full_name"))
+    return repos.get(candidate_slug) or repos.get(repo_full_name)
+
+
+def _evidence_refs(
+    candidate_slug: str,
+    repo: RepositorySummary | None,
+    evidence_by_candidate: Mapping[str, list[dict]],
+) -> list[dict]:
+    refs = [dict(ref) for ref in evidence_by_candidate.get(candidate_slug, [])]
+    if not refs and repo is not None:
+        refs.append(
+            {
+                "source_type": "github_repo",
+                "label": repo.full_name,
+                "source_url": repo.source_url,
+            }
+        )
+    return refs
+
+
+def _adr_options(ranked_candidates: list[Any]) -> str:
+    if not ranked_candidates:
+        return "- No ranked candidates were produced."
+    return "\n".join(
+        f"- {_clean_text(_value(candidate, 'name')) or _value(candidate, 'slug')}: "
+        f"{_value(candidate, 'weighted_score', _value(candidate, 'score', 0))}/100"
+        for candidate in ranked_candidates
+    )
+
+
+def _adr_rationale(ranked_candidates: list[Any]) -> str:
+    if not ranked_candidates:
+        return "No rationale was produced."
+    winner = ranked_candidates[0]
+    reasons = _as_list(_value(winner, "reasons"))
+    if not reasons:
+        return f"{_value(winner, 'name')} ranked first under the selected criteria."
+    return "\n".join(f"- {reason}" for reason in reasons)
+
+
+def _adr_risks(gap_analysis: Mapping[str, Any]) -> str:
+    research_tasks = _as_list(gap_analysis.get("research_tasks"))
+    if not research_tasks:
+        return "- No unresolved research tasks were identified by gap analysis."
+    return "\n".join(
+        f"- {task.get('candidate_slug')}: {task.get('reason')} for "
+        f"{task.get('repo_full_name')}"
+        for task in research_tasks
+        if isinstance(task, Mapping)
+    )
+
+
+def _adr_evidence_links(score_cells: Iterable[Mapping[str, Any]]) -> list[dict]:
+    links_by_url = {}
+    for cell in score_cells:
+        for ref in _as_list(cell.get("evidence_refs")):
+            if not isinstance(ref, Mapping):
+                continue
+            source_url = _clean_text(ref.get("source_url"))
+            if source_url:
+                links_by_url[source_url] = {
+                    "label": _clean_text(ref.get("label")) or source_url,
+                    "source_url": source_url,
+                }
+    return list(links_by_url.values())
+
+
+def _adr_evidence_body(evidence_links: list[dict]) -> str:
+    if not evidence_links:
+        return "- No evidence links were attached."
+    return "\n".join(
+        f"- [{link['label']}]({link['source_url']})" for link in evidence_links
+    )
+
+
+def _join_or_none(value: Any) -> str:
+    items = [str(item) for item in _as_list(value)]
+    return ", ".join(items) if items else "none"
 
 
 def _github_evidence_keys(previous_evidence: Iterable[Any]) -> dict[str, set[str]]:
@@ -354,10 +524,6 @@ def _gap_items(
     if not items:
         items.append({"kind": "no_change", "message": "Draft matches the source baseline."})
     return items
-
-
-def _registry_by_slug() -> dict[str, CandidateProfile]:
-    return {candidate.slug: candidate for candidate in CANDIDATE_REGISTRY}
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
