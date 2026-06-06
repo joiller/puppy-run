@@ -66,11 +66,14 @@ def build_phase2_candidates(context: Mapping[str, Any], draft: Mapping[str, Any]
     candidates = [_candidate_to_dict(candidate) for candidate in _baseline_candidates(context)]
     candidates_by_slug = {candidate["slug"]: candidate for candidate in candidates}
     candidate_order = [candidate["slug"] for candidate in candidates]
+    candidate_overrides = _as_mapping(draft.get("candidate_overrides"))
+    excluded_slugs: set[str] = set()
 
-    for slug, override in _as_mapping(draft.get("candidate_overrides")).items():
+    for slug, override in candidate_overrides.items():
         normalized_slug = _normalize_slug(slug)
         action = _clean_text(_value(override, "action")).lower()
         if action in {"exclude", "must_exclude"}:
+            excluded_slugs.add(normalized_slug)
             candidates_by_slug.pop(normalized_slug, None)
             candidate_order = [
                 existing_slug
@@ -95,6 +98,8 @@ def build_phase2_candidates(context: Mapping[str, Any], draft: Mapping[str, Any]
         _as_mapping(draft.get("custom_candidates")).items()
     ):
         candidate = _custom_candidate_to_dict(slug, custom_candidate)
+        if candidate["slug"] in excluded_slugs:
+            continue
         if candidate["slug"] not in candidates_by_slug:
             candidate_order.append(candidate["slug"])
         candidates_by_slug[candidate["slug"]] = candidate
@@ -102,7 +107,7 @@ def build_phase2_candidates(context: Mapping[str, Any], draft: Mapping[str, Any]
     return [
         candidates_by_slug[slug]
         for slug in candidate_order
-        if slug in candidates_by_slug
+        if slug in candidates_by_slug and slug not in excluded_slugs
     ]
 
 
@@ -199,8 +204,10 @@ def build_score_cells(
     criteria: Iterable[Any],
     repos: Mapping[str, RepositorySummary],
     evidence_by_candidate: Mapping[str, list[dict]],
+    context: Mapping[str, Any] | None = None,
 ) -> list[dict]:
     cells = []
+    scoring_context = dict(_as_mapping(context))
     for candidate in candidates:
         scoring_candidate = _scoring_candidate(candidate)
         candidate_slug = _normalize_slug(_value(scoring_candidate, "slug"))
@@ -212,7 +219,7 @@ def build_score_cells(
                 scoring_candidate,
                 criterion_profile,
                 repo,
-                {},
+                scoring_context,
             )
             cells.append(
                 {

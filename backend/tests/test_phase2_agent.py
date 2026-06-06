@@ -191,6 +191,34 @@ def test_candidate_draft_helpers_include_custom_exclude_and_lock_candidates() ->
     assert candidates[0]["is_locked"] is True
 
 
+def test_custom_candidate_cannot_bypass_must_exclude_override() -> None:
+    draft = normalize_phase2_draft(
+        {
+            "candidate_overrides": {
+                "autogen": {
+                    "action": "must_exclude",
+                    "reason": "Team vetoed this candidate.",
+                }
+            },
+            "custom_candidates": {
+                "autogen": {
+                    "name": "AutoGen",
+                    "repo_full_name": "microsoft/autogen",
+                    "reason": "Team asked to compare AutoGen.",
+                }
+            },
+        },
+        source_version_id="version-1",
+    )
+
+    candidates = build_phase2_candidates(
+        {"mentioned_candidates": ["langgraph"]},
+        draft,
+    )
+
+    assert [candidate["slug"] for candidate in candidates] == ["langgraph"]
+
+
 def test_constraints_and_weight_overrides_shape_weighted_scoring() -> None:
     context = apply_phase2_constraints(
         {"constraints": ["python"]},
@@ -362,6 +390,53 @@ def test_score_cells_cover_each_candidate_criterion_with_evidence_links() -> Non
         assert cell["explanation"]
         assert cell["evidence_refs"]
         assert cell["evidence_refs"][0]["source_type"] == "github_repo"
+
+
+def test_score_cells_use_same_context_as_weighted_recommendation() -> None:
+    context = {"constraints": ["observability"]}
+    candidate = registry_by_slug()["crewai"]
+    criterion = next(
+        criterion
+        for criterion in generate_criteria(context)
+        if criterion.name == "Observability and traceability"
+    )
+    repos = {"crewai": _repo("crewAIInc/crewAI", stars=3000)}
+
+    cells = build_score_cells(
+        [candidate],
+        [criterion],
+        repos,
+        {},
+        context=context,
+    )
+    _, rationale = build_weighted_recommendation(
+        [candidate],
+        [criterion],
+        repos,
+        context,
+        version_number=2,
+    )
+
+    score_breakdown = rationale["ranked_candidates"][0]["score_breakdown"][
+        "Observability and traceability"
+    ]
+    assert cells == [
+        {
+            "candidate_slug": "crewai",
+            "criterion_name": "Observability and traceability",
+            "status": score_breakdown["status"],
+            "score": score_breakdown["score"],
+            "explanation": score_breakdown["explanation"],
+            "evidence_refs": [
+                {
+                    "source_type": "github_repo",
+                    "label": "crewAIInc/crewAI",
+                    "source_url": "https://github.com/crewAIInc/crewAI",
+                }
+            ],
+        }
+    ]
+    assert score_breakdown["score"] == 60
 
 
 def test_adr_builder_returns_required_sections_and_evidence_links() -> None:
