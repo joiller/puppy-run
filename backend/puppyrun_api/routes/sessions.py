@@ -148,14 +148,19 @@ async def create_phase2_version(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="decision session not found") from exc
 
-    redis = await create_pool(redis_settings_from_url(get_settings().redis_url))
+    redis = None
     try:
+        redis = await create_pool(redis_settings_from_url(get_settings().redis_url))
         job = await redis.enqueue_job(
             "run_phase2_agent_job", str(run.id), _job_id=f"phase2:{run.id}"
         )
         run.job_id = job.job_id if job is not None else f"phase2:{run.id}"
+    except Exception as exc:
+        await session_repo.mark_phase2_version_enqueue_failed(db, run.id, exc)
+        raise HTTPException(status_code=503, detail="failed to enqueue phase2 run") from exc
     finally:
-        await redis.close()
+        if redis is not None:
+            await redis.close()
     await db.commit()
     session = await session_repo.get_decision_session(db, session_id)
     if session is None:

@@ -138,9 +138,7 @@ def build_research_plan(
             "candidate_slug": candidate_slug,
             "repo_full_name": repo_full_name,
         }
-        if (candidate_slug in evidence_keys["slugs"]) or (
-            repo_full_name in evidence_keys["repos"]
-        ):
+        if repo_full_name and repo_full_name in evidence_keys["repos"]:
             reuse_tasks.append({**task, "reason": "existing_github_evidence"})
         else:
             research_tasks.append({**task, "reason": "missing_github_evidence"})

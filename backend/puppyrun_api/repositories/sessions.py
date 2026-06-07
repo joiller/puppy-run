@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from puppyrun_agent.phase2 import normalize_phase2_draft
 from puppyrun_api.models import (
     AgentEvent,
     AgentRun,
@@ -91,13 +92,15 @@ async def create_phase2_version_run(
     if session is None:
         raise ValueError(f"decision session not found: {session_id}")
 
-    draft = _phase2_draft(session.decision_context)
-    if draft is None or not _draft_has_changes(draft):
+    raw_draft = _phase2_draft(session.decision_context)
+    draft = normalize_phase2_draft(raw_draft, None)
+    if raw_draft is None or not _draft_has_changes(draft):
         raise Phase2VersionConflictError("no phase2 draft changes found")
 
     source_version = await _completed_source_version(db, session_id, draft.get("source_version_id"))
     if source_version is None:
         raise Phase2VersionConflictError("no completed source version found")
+    draft = normalize_phase2_draft(draft, source_version.id)
 
     run = AgentRun(session_id=session_id, status=AgentRunStatus.queued)
     db.add(run)
@@ -113,6 +116,7 @@ async def create_phase2_version_run(
             "kind": "phase2_targeted",
             "agent_run_id": str(run.id),
             "source_version_id": str(source_version.id),
+            "phase2_draft": draft,
         },
         gap_analysis=_phase2_gap_analysis(session.decision_context),
     )
@@ -123,6 +127,54 @@ async def create_phase2_version_run(
     await db.refresh(run)
     await db.refresh(version)
     return run, version
+
+
+async def mark_phase2_version_enqueue_failed(
+    db: AsyncSession,
+    run_id: UUID,
+    exc: Exception,
+) -> None:
+    await db.rollback()
+
+    run = await db.get(AgentRun, run_id)
+    if run is None:
+        return
+
+    session = await db.get(DecisionSession, run.session_id)
+    version = await _phase2_version_for_run(db, run)
+    message = str(exc)
+    failure = {
+        "error": message,
+        "error_type": type(exc).__name__,
+        "phase": "enqueue",
+    }
+
+    run.status = AgentRunStatus.failed
+    if version is not None:
+        version.status = DecisionVersionStatus.failed
+        version.gap_analysis = {
+            **dict(version.gap_analysis or {}),
+            "failure": failure,
+        }
+        if version.adr is None:
+            version.adr = f"Phase 2 failed before enqueue: {message}"
+
+    if session is not None:
+        session.status = DecisionSessionStatus.failed
+        session.workflow_stage = "failed"
+
+    db.add(
+        AgentEvent(
+            run_id=run.id,
+            event_type="phase2_enqueue_failed",
+            message=f"Phase 2 enqueue failed: {message}",
+            payload={
+                "version_id": str(version.id) if version is not None else None,
+                **failure,
+            },
+        )
+    )
+    await db.commit()
 
 
 async def mark_run_started(db: AsyncSession, run_id: UUID) -> None:
@@ -195,6 +247,21 @@ async def _completed_source_version(
     else:
         statement = statement.order_by(DecisionVersion.version_number.desc()).limit(1)
     return (await db.execute(statement)).scalar_one_or_none()
+
+
+async def _phase2_version_for_run(
+    db: AsyncSession,
+    run: AgentRun,
+) -> DecisionVersion | None:
+    result = await db.execute(
+        select(DecisionVersion)
+        .where(DecisionVersion.session_id == run.session_id)
+        .order_by(DecisionVersion.version_number.desc(), DecisionVersion.created_at.desc())
+    )
+    for version in result.scalars():
+        if str((version.change_summary or {}).get("agent_run_id")) == str(run.id):
+            return version
+    return None
 
 
 async def _next_version_number(db: AsyncSession, session_id: UUID) -> int:

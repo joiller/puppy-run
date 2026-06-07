@@ -234,27 +234,29 @@ async def run_phase2_workflow(
         raise ValueError(f"decision session not found: {run.session_id}")
 
     version = await _queued_phase2_version_for_run(db, run)
-    draft = _phase2_draft_for_run(session, version)
-    source_version = await _source_version_for_draft(db, session.id, draft, version)
-
-    run.status = AgentRunStatus.running
-    version.status = DecisionVersionStatus.running
-    session.status = DecisionSessionStatus.running
-    session.workflow_stage = "researching"
-    db.add(
-        AgentEvent(
-            run_id=run.id,
-            event_type="phase2_started",
-            message=f"Phase 2 workflow started for version {version.version_number}",
-            payload={
-                "version_id": str(version.id),
-                "source_version_id": str(source_version.id),
-            },
-        )
-    )
-    await db.commit()
 
     try:
+        draft = _phase2_draft_for_run(version)
+        source_version = await _source_version_for_draft(db, session.id, draft, version)
+
+        run.status = AgentRunStatus.running
+        version.status = DecisionVersionStatus.running
+        if _current_phase2_draft_matches_version(dict(session.decision_context or {}), version):
+            session.status = DecisionSessionStatus.running
+            session.workflow_stage = "researching"
+        db.add(
+            AgentEvent(
+                run_id=run.id,
+                event_type="phase2_started",
+                message=f"Phase 2 workflow started for version {version.version_number}",
+                payload={
+                    "version_id": str(version.id),
+                    "source_version_id": str(source_version.id),
+                },
+            )
+        )
+        await db.commit()
+
         return await _run_phase2_steps(
             db,
             run,
@@ -514,7 +516,7 @@ async def _persist_phase2_success(
     db.add(
         AgentEvent(
             run_id=run.id,
-            event_type="recommendation_generated",
+            event_type="recommendation_version_created",
             message=summary,
             payload=rationale,
         )
@@ -530,13 +532,16 @@ async def _persist_phase2_success(
     version.status = DecisionVersionStatus.completed
     version.completed_at = utc_now()
     run.status = AgentRunStatus.completed
-    session.status = DecisionSessionStatus.completed
-    session.workflow_stage = "completed"
-    session.current_summary = summary
     context = dict(session.decision_context or {})
-    context.pop("phase2_draft", None)
-    context["phase2_gap_analysis"] = gap_analysis
-    session.decision_context = context
+    if _current_phase2_draft_matches_version(context, version):
+        session.status = DecisionSessionStatus.completed
+        session.workflow_stage = "completed"
+        session.current_summary = summary
+        context.pop("phase2_draft", None)
+        context["phase2_gap_analysis"] = gap_analysis
+        session.decision_context = context
+    else:
+        await _release_stale_phase2_session_state(db, session, run.id)
     await db.commit()
     return summary
 
@@ -596,8 +601,11 @@ async def _mark_phase2_failed(
     if version.adr is None:
         version.adr = f"Phase 2 failed before ADR generation: {message}"
     if session is not None:
-        session.status = DecisionSessionStatus.failed
-        session.workflow_stage = "failed"
+        if _current_phase2_draft_matches_version(dict(session.decision_context or {}), version):
+            session.status = DecisionSessionStatus.failed
+            session.workflow_stage = "failed"
+        else:
+            await _release_stale_phase2_session_state(db, session, run.id)
 
     db.add(
         AgentEvent(
@@ -666,15 +674,61 @@ async def _queued_phase2_version_for_run(
     raise ValueError(f"queued decision version not found for run: {run.id}")
 
 
-def _phase2_draft_for_run(session: DecisionSession, version: DecisionVersion) -> dict:
-    context = session.decision_context or {}
-    raw_draft = context.get("phase2_draft")
+def _phase2_draft_for_run(version: DecisionVersion) -> dict:
+    change_summary = version.change_summary or {}
+    raw_draft = change_summary.get("phase2_draft")
     if not isinstance(raw_draft, dict):
-        raise ValueError("no phase2 draft found")
+        raise ValueError("no phase2 draft snapshot found")
     draft = normalize_phase2_draft(raw_draft, version.source_version_id)
     if not _draft_has_changes(draft):
         raise ValueError("no phase2 draft changes found")
     return draft
+
+
+def _current_phase2_draft_matches_version(context: dict, version: DecisionVersion) -> bool:
+    current_draft = context.get("phase2_draft")
+    if not isinstance(current_draft, dict):
+        return True
+    queued_draft = (version.change_summary or {}).get("phase2_draft")
+    if not isinstance(queued_draft, dict):
+        return False
+    normalized_current = normalize_phase2_draft(current_draft, version.source_version_id)
+    normalized_queued = normalize_phase2_draft(queued_draft, version.source_version_id)
+    return normalized_current == normalized_queued
+
+
+async def _release_stale_phase2_session_state(
+    db: AsyncSession,
+    session: DecisionSession,
+    completed_run_id: UUID,
+) -> None:
+    if session.status not in {
+        DecisionSessionStatus.queued,
+        DecisionSessionStatus.running,
+    }:
+        return
+
+    active_run_count = await db.scalar(
+        select(func.count())
+        .select_from(AgentRun)
+        .where(AgentRun.session_id == session.id)
+        .where(AgentRun.id != completed_run_id)
+        .where(AgentRun.status.in_([AgentRunStatus.queued, AgentRunStatus.running]))
+    )
+    if int(active_run_count or 0) > 0:
+        return
+
+    completed_version_count = await db.scalar(
+        select(func.count())
+        .select_from(DecisionVersion)
+        .where(DecisionVersion.session_id == session.id)
+        .where(DecisionVersion.status == DecisionVersionStatus.completed)
+    )
+    session.status = (
+        DecisionSessionStatus.completed
+        if int(completed_version_count or 0) > 0
+        else DecisionSessionStatus.created
+    )
 
 
 async def _source_version_for_draft(
@@ -809,9 +863,22 @@ def _source_evidence_for_candidate(
 ) -> EvidenceItem | None:
     candidate_slug = _normalize_slug(candidate["slug"])
     repo_full_name = _clean_text(candidate["repo_full_name"])
-    return source_evidence["by_slug"].get(candidate_slug) or source_evidence["by_repo"].get(
-        repo_full_name
-    )
+    evidence_by_repo = source_evidence["by_repo"].get(repo_full_name)
+    if evidence_by_repo is not None:
+        return evidence_by_repo
+
+    evidence_by_slug = source_evidence["by_slug"].get(candidate_slug)
+    if (
+        evidence_by_slug is not None
+        and _evidence_repo_full_name(evidence_by_slug) == repo_full_name
+    ):
+        return evidence_by_slug
+    return None
+
+
+def _evidence_repo_full_name(evidence: EvidenceItem) -> str:
+    payload = dict(evidence.payload or {})
+    return _clean_text(payload.get("full_name"))
 
 
 def _repo_for_candidate(

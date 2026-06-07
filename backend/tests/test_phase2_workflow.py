@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from puppyrun_agent.criteria import generate_criteria
+from puppyrun_agent.phase2 import normalize_phase2_draft
 from puppyrun_agent.workflow import run_phase2_workflow
 from puppyrun_api.db import Base
 from puppyrun_api.models import (
@@ -20,7 +21,7 @@ from puppyrun_api.models import (
     Recommendation,
     ScoreCell,
 )
-from puppyrun_api.repositories.sessions import create_decision_session
+from puppyrun_api.repositories.sessions import create_decision_session, create_phase2_version_run
 from puppyrun_api.repositories.workspace import get_workspace
 
 BASELINE_CONTEXT = {
@@ -116,7 +117,192 @@ async def test_phase2_weight_only_rerun_reuses_evidence_without_github_fetches()
 
         event_types = await _event_types(db, run_id)
         assert event_types[:2] == ["phase2_started", "targeted_research_planned"]
-        assert "recommendation_generated" in event_types
+        assert "recommendation_version_created" in event_types
+        assert "recommendation_generated" not in event_types
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase2_uses_queued_draft_snapshot_when_session_draft_changes() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as db:
+        session_id, source_version_id = await _seed_completed_baseline(db)
+        await _store_phase2_draft(
+            db,
+            session_id,
+            {
+                "source_version_id": str(source_version_id),
+                "candidate_overrides": {},
+                "custom_candidates": {},
+                "must_include_constraints": {},
+                "must_exclude_constraints": {},
+                "weight_overrides": {
+                    "Observability and traceability": {
+                        "weight": 45,
+                        "reason": "Traceability is the original queued driver.",
+                    }
+                },
+            },
+        )
+        run, version = await create_phase2_version_run(db, session_id)
+        run_id = run.id
+        version_id = version.id
+
+        session = await db.get(DecisionSession, session_id)
+        assert session is not None
+        context = dict(session.decision_context or {})
+        context["phase2_draft"] = {
+            "source_version_id": str(source_version_id),
+            "candidate_overrides": {},
+            "custom_candidates": {
+                "autogen": {
+                    "name": "AutoGen",
+                    "slug": "autogen",
+                    "repo_full_name": "microsoft/autogen",
+                    "reason": "This later edit must not affect the queued run.",
+                }
+            },
+            "must_include_constraints": {},
+            "must_exclude_constraints": {},
+            "weight_overrides": {},
+        }
+        session.decision_context = context
+        session.workflow_stage = "context_changed"
+        await db.commit()
+
+    def unexpected_fetch(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"queued snapshot workflow fetched {request.url.path}")
+
+    async with maker() as db:
+        await run_phase2_workflow(
+            db,
+            run_id,
+            github_transport=httpx.MockTransport(unexpected_fetch),
+        )
+
+    async with maker() as db:
+        session = await db.get(DecisionSession, session_id)
+        version = await db.get(DecisionVersion, version_id)
+        assert session is not None
+        assert version is not None
+        assert session.status == DecisionSessionStatus.completed
+        assert session.workflow_stage == "context_changed"
+        latest_draft = session.decision_context["phase2_draft"]
+        assert latest_draft["custom_candidates"] == {
+            "autogen": {
+                "name": "AutoGen",
+                "slug": "autogen",
+                "repo_full_name": "microsoft/autogen",
+                "reason": "This later edit must not affect the queued run.",
+            }
+        }
+        assert version.status == DecisionVersionStatus.completed
+        assert version.source_version_id == source_version_id
+        assert version.change_summary["phase2_draft"]["source_version_id"] == str(
+            source_version_id
+        )
+        assert version.gap_analysis["score_only"] is True
+        assert version.gap_analysis["requires_github_fetch"] is False
+
+        candidates = await _version_rows(db, DecisionCandidate, version_id)
+        assert [candidate.slug for candidate in candidates] == [
+            "langgraph",
+            "openai_agents_sdk",
+        ]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase2_stale_failure_preserves_newer_session_draft_state() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as db:
+        session_id, source_version_id = await _seed_completed_baseline(db)
+        await _store_phase2_draft(
+            db,
+            session_id,
+            {
+                "source_version_id": str(source_version_id),
+                "candidate_overrides": {},
+                "custom_candidates": {
+                    "autogen": {
+                        "name": "AutoGen",
+                        "slug": "autogen",
+                        "repo_full_name": "microsoft/autogen",
+                        "reason": "Team asked to compare AutoGen.",
+                    }
+                },
+                "must_include_constraints": {},
+                "must_exclude_constraints": {},
+                "weight_overrides": {},
+            },
+        )
+        run_id, version_id = await _queue_phase2_version(db, session_id, source_version_id)
+
+        session = await db.get(DecisionSession, session_id)
+        assert session is not None
+        context = dict(session.decision_context or {})
+        context["phase2_draft"] = {
+            "source_version_id": str(source_version_id),
+            "candidate_overrides": {},
+            "custom_candidates": {},
+            "must_include_constraints": {},
+            "must_exclude_constraints": {},
+            "weight_overrides": {
+                "Observability and traceability": {
+                    "weight": 45,
+                    "reason": "This later edit must stay active after the stale failure.",
+                }
+            },
+        }
+        session.decision_context = context
+        session.workflow_stage = "context_changed"
+        await db.commit()
+
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(500, json={"message": "GitHub unavailable"})
+    )
+    async with maker() as db:
+        with pytest.raises(httpx.HTTPStatusError):
+            await run_phase2_workflow(db, run_id, github_transport=transport)
+
+    async with maker() as db:
+        session = await db.get(DecisionSession, session_id)
+        source_version = await db.get(DecisionVersion, source_version_id)
+        failed_version = await db.get(DecisionVersion, version_id)
+        run = await db.get(AgentRun, run_id)
+        assert session is not None
+        assert source_version is not None
+        assert failed_version is not None
+        assert run is not None
+
+        assert session.status == DecisionSessionStatus.completed
+        assert session.workflow_stage == "context_changed"
+        latest_draft = session.decision_context["phase2_draft"]
+        assert latest_draft["weight_overrides"] == {
+            "Observability and traceability": {
+                "weight": 45,
+                "reason": "This later edit must stay active after the stale failure.",
+            }
+        }
+        assert source_version.status == DecisionVersionStatus.completed
+        assert failed_version.status == DecisionVersionStatus.failed
+        assert failed_version.gap_analysis["failure"]["error"] == "GitHub unavailable"
+        assert run.status == AgentRunStatus.failed
+        assert await _event_types(db, run_id) == [
+            "phase2_started",
+            "targeted_research_planned",
+            "phase2_failed",
+        ]
 
     await engine.dispose()
 
@@ -199,6 +385,163 @@ async def test_phase2_added_candidate_fetches_only_new_github_repo() -> None:
         }
         assert len(score_cells) == len(candidates) * 5
         assert recommendations[0].rationale["recommended_version"] == 2
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase2_same_slug_different_repo_fetches_and_persists_new_github_evidence() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as db:
+        session_id, source_version_id = await _seed_completed_baseline(db)
+        await _store_phase2_draft(
+            db,
+            session_id,
+            {
+                "source_version_id": str(source_version_id),
+                "candidate_overrides": {},
+                "custom_candidates": {
+                    "langgraph": {
+                        "name": "LangGraph Fork",
+                        "slug": "langgraph",
+                        "repo_full_name": "example/langgraph-fork",
+                        "reason": "Compare a maintained internal fork under the same slug.",
+                    }
+                },
+                "must_include_constraints": {},
+                "must_exclude_constraints": {},
+                "weight_overrides": {},
+            },
+        )
+        run_id, version_id = await _queue_phase2_version(db, session_id, source_version_id)
+
+    fetched_repos: list[str] = []
+
+    def fetch_only_changed_repo(request: httpx.Request) -> httpx.Response:
+        repo_name = request.url.path.removeprefix("/repos/")
+        fetched_repos.append(repo_name)
+        if repo_name != "example/langgraph-fork":
+            pytest.fail(f"unexpected GitHub fetch for {repo_name}")
+        return _github_response(repo_name, stars=18000)
+
+    async with maker() as db:
+        await run_phase2_workflow(
+            db,
+            run_id,
+            github_transport=httpx.MockTransport(fetch_only_changed_repo),
+        )
+
+    assert fetched_repos == ["example/langgraph-fork"]
+
+    async with maker() as db:
+        version = await db.get(DecisionVersion, version_id)
+        assert version is not None
+        assert version.status == DecisionVersionStatus.completed
+        assert version.gap_analysis["research_tasks"] == [
+            {
+                "candidate_slug": "langgraph",
+                "repo_full_name": "example/langgraph-fork",
+                "reason": "missing_github_evidence",
+            }
+        ]
+
+        candidates = await _version_rows(db, DecisionCandidate, version_id)
+        evidence_items = await _version_rows(db, EvidenceItem, version_id)
+        assert {
+            (candidate.slug, candidate.repo_full_name) for candidate in candidates
+        } == {
+            ("langgraph", "example/langgraph-fork"),
+            ("openai_agents_sdk", "openai/openai-agents-python"),
+        }
+        assert {evidence.payload["full_name"] for evidence in evidence_items} == {
+            "example/langgraph-fork",
+            "openai/openai-agents-python",
+        }
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase2_invalid_queued_snapshot_marks_run_and_version_failed() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as db:
+        session_id, source_version_id = await _seed_completed_baseline(db)
+        run = AgentRun(session_id=session_id, status=AgentRunStatus.queued)
+        db.add(run)
+        await db.flush()
+        version = DecisionVersion(
+            session_id=session_id,
+            version_number=2,
+            label="Phase 2 revision",
+            status=DecisionVersionStatus.queued,
+            source_version_id=source_version_id,
+            change_summary={
+                "agent_run_id": str(run.id),
+                "kind": "phase2_targeted",
+                "phase2_draft": {
+                    "source_version_id": "00000000-0000-0000-0000-000000000001",
+                    "candidate_overrides": {},
+                    "custom_candidates": {},
+                    "must_include_constraints": {},
+                    "must_exclude_constraints": {},
+                    "weight_overrides": {
+                        "Observability and traceability": {
+                            "weight": 45,
+                            "reason": "Traceability remains important.",
+                        }
+                    },
+                },
+            },
+            gap_analysis={},
+        )
+        db.add(version)
+        session = await db.get(DecisionSession, session_id)
+        assert session is not None
+        session.status = DecisionSessionStatus.queued
+        session.workflow_stage = "queued"
+        await db.commit()
+        run_id = run.id
+        version_id = version.id
+
+    def unexpected_fetch(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"invalid snapshot workflow fetched {request.url.path}")
+
+    async with maker() as db:
+        with pytest.raises(ValueError, match="no completed source version found"):
+            await run_phase2_workflow(
+                db,
+                run_id,
+                github_transport=httpx.MockTransport(unexpected_fetch),
+            )
+
+    async with maker() as db:
+        source_version = await db.get(DecisionVersion, source_version_id)
+        failed_version = await db.get(DecisionVersion, version_id)
+        run = await db.get(AgentRun, run_id)
+        session = await db.get(DecisionSession, session_id)
+        assert source_version is not None
+        assert failed_version is not None
+        assert run is not None
+        assert session is not None
+
+        assert source_version.status == DecisionVersionStatus.completed
+        assert failed_version.status == DecisionVersionStatus.failed
+        assert failed_version.gap_analysis["failure"] == {
+            "error": "no completed source version found",
+            "error_type": "ValueError",
+        }
+        assert run.status == AgentRunStatus.failed
+        assert session.status == DecisionSessionStatus.failed
+        assert session.workflow_stage == "failed"
+        assert await _event_types(db, run_id) == ["phase2_failed"]
 
     await engine.dispose()
 
@@ -400,18 +743,25 @@ async def _queue_phase2_version(
     run = AgentRun(session_id=session_id, status=AgentRunStatus.queued)
     db.add(run)
     await db.flush()
+    session = await db.get(DecisionSession, session_id)
+    assert session is not None
+    raw_draft = (session.decision_context or {}).get("phase2_draft")
+    draft = normalize_phase2_draft(raw_draft, source_version_id)
     version = DecisionVersion(
         session_id=session_id,
         version_number=2,
         label="Phase 2 revision",
         status=DecisionVersionStatus.queued,
         source_version_id=source_version_id,
-        change_summary={"agent_run_id": str(run.id), "kind": "phase2_targeted"},
+        change_summary={
+            "agent_run_id": str(run.id),
+            "kind": "phase2_targeted",
+            "source_version_id": str(source_version_id),
+            "phase2_draft": draft,
+        },
         gap_analysis={},
     )
     db.add(version)
-    session = await db.get(DecisionSession, session_id)
-    assert session is not None
     session.status = DecisionSessionStatus.queued
     await db.commit()
     return run.id, version.id

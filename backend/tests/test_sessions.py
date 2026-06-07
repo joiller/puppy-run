@@ -310,10 +310,113 @@ async def test_create_phase2_version_enqueues_targeted_job(
         created_version = versions[1]
         assert created_version.status == models.DecisionVersionStatus.queued
         assert created_version.source_version_id == source_version_id
+        assert created_version.change_summary["phase2_draft"]["source_version_id"] == str(
+            source_version_id
+        )
+        assert created_version.change_summary["phase2_draft"]["weight_overrides"] == {
+            "Observability and traceability": {
+                "weight": 45,
+                "reason": "Traceability is the main driver.",
+            }
+        }
 
         run = await db.get(models.AgentRun, UUID(payload["run"]["id"]))
         assert run is not None
         assert created_version.change_summary["agent_run_id"] == str(run.id)
+
+
+@pytest.mark.asyncio
+async def test_create_phase2_version_marks_run_failed_when_enqueue_fails(
+    session_client_with_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, maker = session_client_with_db
+    async with maker() as db:
+        session = await create_decision_session(
+            db,
+            "Compare LangGraph and OpenAI Agents SDK for a stateful Agent runtime.",
+        )
+        version = models.DecisionVersion(
+            session_id=session.id,
+            version_number=1,
+            label="Phase 1 baseline",
+            status=models.DecisionVersionStatus.completed,
+            change_summary={"kind": "phase1_baseline"},
+            gap_analysis={"items": []},
+            adr="ADR v1: Recommended LangGraph.",
+        )
+        db.add(version)
+        await db.flush()
+        session.decision_context = {
+            **session.decision_context,
+            "phase2_draft": {
+                "source_version_id": str(version.id),
+                "candidate_overrides": {},
+                "custom_candidates": {},
+                "must_include_constraints": {},
+                "must_exclude_constraints": {},
+                "weight_overrides": {
+                    "Observability and traceability": {
+                        "weight": 45,
+                        "reason": "Traceability is the main driver.",
+                    }
+                },
+            },
+        }
+        await db.commit()
+        session_id = session.id
+
+    class FakeRedis:
+        async def enqueue_job(self, name: str, run_id: str, _job_id: str):
+            raise RuntimeError("redis enqueue failed")
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(settings):
+        return FakeRedis()
+
+    monkeypatch.setattr("puppyrun_api.routes.sessions.create_pool", fake_create_pool)
+
+    response = await client.post(f"/api/v1/sessions/{session_id}/versions")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "failed to enqueue phase2 run"
+
+    async with maker() as db:
+        versions = (
+            await db.execute(
+                select(models.DecisionVersion).order_by(models.DecisionVersion.version_number)
+            )
+        ).scalars().all()
+        assert [version.version_number for version in versions] == [1, 2]
+        failed_version = versions[1]
+        assert failed_version.status == models.DecisionVersionStatus.failed
+        assert failed_version.gap_analysis["failure"] == {
+            "error": "redis enqueue failed",
+            "error_type": "RuntimeError",
+            "phase": "enqueue",
+        }
+
+        run = (
+            await db.execute(
+                select(models.AgentRun).where(models.AgentRun.session_id == session_id)
+            )
+        ).scalar_one()
+        session = await db.get(models.DecisionSession, session_id)
+        assert session is not None
+        assert run.status == models.AgentRunStatus.failed
+        assert session.status == models.DecisionSessionStatus.failed
+        assert session.workflow_stage == "failed"
+
+        events = (
+            await db.execute(
+                select(models.AgentEvent)
+                .where(models.AgentEvent.run_id == run.id)
+                .order_by(models.AgentEvent.created_at.asc())
+            )
+        ).scalars().all()
+        assert [event.event_type for event in events] == ["phase2_enqueue_failed"]
 
 
 @pytest.mark.asyncio
