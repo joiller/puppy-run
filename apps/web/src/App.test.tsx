@@ -1,22 +1,42 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { createSession, getWorkspace, listSessions, sendMessage, startRun } from "./api";
-import type { DecisionSession, StartAgentRunResponse, Workspace } from "./types";
+import {
+  createDecisionVersion,
+  createSession,
+  getWorkspace,
+  listSessions,
+  sendMessage,
+  startRun,
+  updateDraft
+} from "./api";
+import type {
+  DecisionSession,
+  DecisionVersion,
+  GapAnalysis,
+  Phase2Draft,
+  StartAgentRunResponse,
+  Workspace
+} from "./types";
+import { activeRecommendation, evidenceForScoreCell, gapSummary, latestVersion, scoreCellFor } from "./workbench";
 
 vi.mock("./api", () => ({
+  createDecisionVersion: vi.fn(),
   createSession: vi.fn(),
   getWorkspace: vi.fn(),
   listSessions: vi.fn(),
   sendMessage: vi.fn(),
-  startRun: vi.fn()
+  startRun: vi.fn(),
+  updateDraft: vi.fn()
 }));
 
+const createDecisionVersionMock = vi.mocked(createDecisionVersion);
 const createSessionMock = vi.mocked(createSession);
 const getWorkspaceMock = vi.mocked(getWorkspace);
 const listSessionsMock = vi.mocked(listSessions);
 const sendMessageMock = vi.mocked(sendMessage);
 const startRunMock = vi.mocked(startRun);
+const updateDraftMock = vi.mocked(updateDraft);
 let triggerPoll: (() => void) | null = null;
 
 function deferred<T>(): {
@@ -43,7 +63,10 @@ function makeSession(
     prompt: "Compare LangGraph and OpenAI Agents SDK for a stateful Agent runtime.",
     status,
     workflow_stage: status === "created" ? "clarifying" : status,
-    decision_context: { domain: "agent_framework_selection" },
+    decision_context: {
+      domain: "agent_framework_selection",
+      constraints: ["checkpointing", "python"]
+    },
     current_summary: currentSummary,
     created_at: "2026-05-27T00:00:00Z",
     updated_at: "2026-05-27T00:00:00Z"
@@ -61,6 +84,71 @@ function makeRunResponse(session: DecisionSession): StartAgentRunResponse {
       created_at: "2026-05-22T00:00:00Z",
       updated_at: "2026-05-22T00:00:00Z"
     }
+  };
+}
+
+function makeDraft(sourceVersionId: string | null = null, overrides: Partial<Phase2Draft> = {}): Phase2Draft {
+  return {
+    source_version_id: sourceVersionId,
+    candidate_overrides: {},
+    custom_candidates: {},
+    must_include_constraints: {},
+    must_exclude_constraints: {},
+    weight_overrides: {},
+    ...overrides
+  };
+}
+
+function makeGap(overrides: Partial<GapAnalysis> = {}): GapAnalysis {
+  return {
+    requires_research: false,
+    requires_github_fetch: false,
+    score_only: false,
+    changed_candidates: [],
+    changed_constraints: [],
+    changed_weights: [],
+    research_tasks: [],
+    reuse_tasks: [],
+    items: [],
+    ...overrides
+  };
+}
+
+function gapFromDraft(draft: Phase2Draft): GapAnalysis {
+  const changedCandidates = Array.from(
+    new Set([...Object.keys(draft.candidate_overrides), ...Object.keys(draft.custom_candidates)])
+  );
+  const changedConstraints = Array.from(
+    new Set([
+      ...Object.keys(draft.must_include_constraints),
+      ...Object.keys(draft.must_exclude_constraints)
+    ])
+  );
+  const changedWeights = Object.keys(draft.weight_overrides);
+  return makeGap({
+    requires_research: changedCandidates.length > 0 || changedConstraints.length > 0,
+    score_only: changedCandidates.length === 0 && changedConstraints.length === 0 && changedWeights.length > 0,
+    changed_candidates: changedCandidates,
+    changed_constraints: changedConstraints,
+    changed_weights: changedWeights,
+    research_tasks: changedCandidates.map((candidate) => ({ candidate }))
+  });
+}
+
+function makeVersion(versionNumber: number, overrides: Partial<DecisionVersion> = {}): DecisionVersion {
+  return {
+    id: `version-${versionNumber}`,
+    session_id: "session-1",
+    version_number: versionNumber,
+    label: `Version ${versionNumber}`,
+    status: "completed",
+    source_version_id: versionNumber === 1 ? null : `version-${versionNumber - 1}`,
+    change_summary: {},
+    gap_analysis: {},
+    adr: `ADR v${versionNumber}: choose ${versionNumber === 1 ? "LangGraph" : "OpenAI Agents SDK"}.`,
+    created_at: `2026-05-2${versionNumber}T00:00:00Z`,
+    completed_at: `2026-05-2${versionNumber}T00:00:00Z`,
+    ...overrides
   };
 }
 
@@ -85,15 +173,21 @@ function getRunButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Run Phase 1 Agent" }) as HTMLButtonElement;
 }
 
+function getTargetedRunButton(): HTMLButtonElement {
+  return screen.getByRole("button", { name: "Run targeted re-research" }) as HTMLButtonElement;
+}
+
 function getSendAnswerButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Send answer" }) as HTMLButtonElement;
 }
 
 function makeWorkspace(
   session: DecisionSession,
-  extraMessages: Array<{ role: string; content: string }> = []
+  extraMessages: Array<{ role: string; content: string }> = [],
+  overrides: Partial<Workspace> = {}
 ): Workspace {
-  return {
+  const draft = makeDraft(null);
+  const baseWorkspace: Workspace = {
     session,
     messages: [
       {
@@ -112,64 +206,107 @@ function makeWorkspace(
         created_at: "2026-05-27T00:00:00Z"
       }))
     ],
+    versions: [],
+    active_version: null,
+    draft,
+    gap_analysis: makeGap(),
     candidates: [],
     criteria: [],
     evidence_items: [],
+    score_cells: [],
     recommendations: [],
     events: []
   };
+  return { ...baseWorkspace, ...overrides };
 }
 
-function makeCompletedWorkspace(session: DecisionSession): Workspace {
+function makeCompletedWorkspace(session: DecisionSession, overrides: Partial<Workspace> = {}): Workspace {
+  const version = overrides.active_version ?? makeVersion(1, { session_id: session.id });
+  const draft = overrides.draft ?? makeDraft(version.id);
+  const candidateId = version.version_number === 1 ? "candidate-1" : "candidate-2";
+  const candidateName = version.version_number === 1 ? "LangGraph" : "OpenAI Agents SDK";
+  const criterionId = "criterion-1";
+  const evidenceId = version.version_number === 1 ? "evidence-1" : "evidence-2";
   return {
     ...makeWorkspace(session),
+    versions: overrides.versions ?? [version],
+    active_version: version,
+    draft,
+    gap_analysis: overrides.gap_analysis ?? makeGap(),
     candidates: [
       {
-        id: "candidate-1",
+        id: candidateId,
         session_id: session.id,
-        name: "LangGraph",
-        slug: "langgraph",
-        repo_full_name: "langchain-ai/langgraph",
+        decision_version_id: version.id,
+        name: candidateName,
+        slug: version.version_number === 1 ? "langgraph" : "openai-agents-sdk",
+        repo_full_name:
+          version.version_number === 1 ? "langchain-ai/langgraph" : "openai/openai-agents-python",
         include_reason: "Included for checkpointed stateful workflows.",
-        health_summary: "langchain-ai/langgraph: 50000 stars.",
+        health_summary: `${candidateName}: 50000 stars.`,
         health_metrics: { stars: 50000 },
-        score: 85,
+        score: version.version_number === 1 ? 92 : 88,
+        selection_state: "included",
+        is_locked: false,
         created_at: "2026-05-27T00:00:00Z"
       }
     ],
     criteria: [
       {
-        id: "criterion-1",
+        id: criterionId,
         session_id: session.id,
+        decision_version_id: version.id,
         name: "Runtime control and state",
         weight: 30,
         rationale: "State handling is central for long-running Agent workflows.",
         evidence_needed: "Checkpoint and state support.",
+        is_locked: false,
         created_at: "2026-05-27T00:00:00Z"
       }
     ],
     evidence_items: [
       {
-        id: "evidence-1",
+        id: evidenceId,
         session_id: session.id,
-        candidate_id: "candidate-1",
+        decision_version_id: version.id,
+        candidate_id: candidateId,
         criterion_id: null,
         source_type: "github_repo",
-        source_url: "https://github.com/langchain-ai/langgraph",
-        title: "GitHub repository health for LangGraph",
-        summary: "langchain-ai/langgraph: 50000 stars.",
+        source_url:
+          version.version_number === 1
+            ? "https://github.com/langchain-ai/langgraph"
+            : "https://github.com/openai/openai-agents-python",
+        title: `GitHub repository health for ${candidateName}`,
+        summary: `${candidateName}: 50000 stars.`,
         credibility: "medium",
         payload: { stars: 50000 },
         created_at: "2026-05-27T00:00:00Z"
       }
     ],
+    score_cells: [
+      {
+        id: `score-cell-${version.version_number}`,
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        criterion_id: criterionId,
+        score: version.version_number === 1 ? 92 : 88,
+        status: "supported",
+        explanation: `${candidateName} has strong runtime evidence.`,
+        evidence_item_ids: [evidenceId],
+        created_at: "2026-05-27T00:00:00Z"
+      }
+    ],
     recommendations: [
       {
-        id: "recommendation-1",
+        id: `recommendation-${version.version_number}`,
         session_id: session.id,
-        recommended_candidate_id: "candidate-1",
-        summary: session.current_summary ?? "",
-        rationale: { recommended_slug: "langgraph" },
+        decision_version_id: version.id,
+        recommended_candidate_id: candidateId,
+        summary:
+          session.current_summary ??
+          `Recommended: ${candidateName}. It scored ${version.version_number === 1 ? 92 : 88}/100.`,
+        rationale: { recommended_slug: version.version_number === 1 ? "langgraph" : "openai-agents-sdk" },
         created_at: "2026-05-27T00:00:00Z"
       }
     ],
@@ -178,13 +315,73 @@ function makeCompletedWorkspace(session: DecisionSession): Workspace {
         id: "event-1",
         run_id: "run-1",
         event_type: "recommendation_generated",
-        message: session.current_summary ?? "",
+        message: session.current_summary ?? `Recommended: ${candidateName}.`,
         payload: {},
         created_at: "2026-05-27T00:00:00Z"
       }
-    ]
+    ],
+    ...overrides
   };
 }
+
+describe("workbench helpers", () => {
+  it("selects versions, recommendations, score cells, evidence, and gap summaries", () => {
+    const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    const workspace = makeCompletedWorkspace(completed);
+    const activeVersion = latestVersion(workspace);
+
+    expect(activeVersion?.id).toBe("version-1");
+    expect(activeRecommendation(workspace)?.summary).toContain("LangGraph");
+    const scoreCell = scoreCellFor(workspace, "candidate-1", "criterion-1");
+    expect(scoreCell?.score).toBe(92);
+    expect(scoreCell ? evidenceForScoreCell(workspace, scoreCell).map((item) => item.id) : []).toEqual([
+      "evidence-1"
+    ]);
+    expect(gapSummary(makeGap())).toBe("No draft changes yet.");
+
+    const fallbackWorkspace = { ...workspace, active_version: null };
+    expect(latestVersion(fallbackWorkspace)?.id).toBe("version-1");
+  });
+});
+
+describe("api functions", () => {
+  it("calls Phase 2 draft, version, and versioned workspace endpoints", async () => {
+    const completed = makeSession("completed", "Recommended: LangGraph.");
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify(makeCompletedWorkspace(completed)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const actualApi = await vi.importActual<typeof import("./api")>("./api");
+    const draft = makeDraft("version-1", {
+      weight_overrides: {
+        "Runtime control and state": { weight: 45, reason: "Runtime recovery matters most." }
+      }
+    });
+
+    await actualApi.updateDraft("session-1", draft);
+    await actualApi.createDecisionVersion("session-1");
+    await actualApi.getWorkspace("session-1", "version-2");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://localhost:8000/api/v1/sessions/session-1/draft",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify(draft) })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://localhost:8000/api/v1/sessions/session-1/versions",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://localhost:8000/api/v1/sessions/session-1/workspace?version_id=version-2",
+      expect.any(Object)
+    );
+  });
+});
 
 describe("App", () => {
   beforeEach(() => {
@@ -196,26 +393,29 @@ describe("App", () => {
       return 1;
     });
     vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+    createDecisionVersionMock.mockReset();
     createSessionMock.mockReset();
     getWorkspaceMock.mockReset();
     listSessionsMock.mockReset();
     sendMessageMock.mockReset();
     startRunMock.mockReset();
+    updateDraftMock.mockReset();
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("shows clarification, recommendation, evidence, and trace for a Phase 1 run", async () => {
+  it("shows clarification, recommendation, evidence, trace, version, matrix, drawer, and ADR for a Phase 1 run", async () => {
     const created = makeSession("created");
     const ready: DecisionSession = { ...created, workflow_stage: "ready_for_research" };
     const completed: DecisionSession = {
       ...created,
       status: "completed",
       workflow_stage: "completed",
-      current_summary: "Recommended: LangGraph. It scored 85/100."
+      current_summary: "Recommended: LangGraph. It scored 92/100."
     };
     let workspace = makeWorkspace(created);
 
@@ -267,16 +467,458 @@ describe("App", () => {
     await waitFor(() => {
       expect(within(screen.getByLabelText("Decision workspace")).getByText(/Recommended: LangGraph/))
         .toBeTruthy();
+      expect(screen.getByRole("button", { name: "Version 1 completed" })).toBeTruthy();
       expect(screen.getByText("GitHub repository health for LangGraph")).toBeTruthy();
       const traceRow = within(screen.getByLabelText("Evidence and trace"))
         .getByText("recommendation_generated")
         .closest("article");
       expect(traceRow).toBeTruthy();
       expect(
-        within(traceRow as HTMLElement).getByText("Recommended: LangGraph. It scored 85/100.")
+        within(traceRow as HTMLElement).getByText("Recommended: LangGraph. It scored 92/100.")
       ).toBeTruthy();
       expect(getRunButton().disabled).toBe(true);
       expect(screen.getByRole("button", { name: "Compare LangGraph completed" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Open evidence for LangGraph Runtime control and state/i }));
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Evidence drawer")).getByText(/strong runtime evidence/i))
+        .toBeTruthy();
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v1/i)).toBeTruthy();
+    });
+  });
+
+  it("updates Phase 2 draft controls and shows gap analysis without creating a version", async () => {
+    const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    let workspace = makeCompletedWorkspace(completed);
+
+    listSessionsMock.mockImplementation(async () => [completed]);
+    getWorkspaceMock.mockImplementation(async () => workspace);
+    updateDraftMock.mockImplementation(async (_sessionId: string, draft: Phase2Draft) => {
+      workspace = makeCompletedWorkspace(completed, {
+        draft,
+        gap_analysis: gapFromDraft(draft)
+      });
+      return workspace;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Version 1 completed" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Must exclude LangGraph" }));
+    await waitFor(() => {
+      expect(updateDraftMock).toHaveBeenLastCalledWith(
+        completed.id,
+        expect.objectContaining({
+          candidate_overrides: expect.objectContaining({
+            langgraph: expect.objectContaining({ action: "must_exclude" })
+          })
+        })
+      );
+      expect(within(screen.getByLabelText("Gap analysis")).getByText(/Changed candidates: langgraph/i))
+        .toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Must include checkpointing" }));
+    await waitFor(() => {
+      expect(updateDraftMock).toHaveBeenLastCalledWith(
+        completed.id,
+        expect.objectContaining({
+          must_include_constraints: expect.objectContaining({
+            checkpointing: expect.objectContaining({ enabled: true })
+          })
+        })
+      );
+      expect(within(screen.getByLabelText("Gap analysis")).getByText(/Changed constraints: checkpointing/i))
+        .toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Custom candidate name"), {
+      target: { value: "AutoGen" }
+    });
+    fireEvent.change(screen.getByLabelText("Custom candidate slug"), {
+      target: { value: "autogen" }
+    });
+    fireEvent.change(screen.getByLabelText("Custom candidate repository"), {
+      target: { value: "microsoft/autogen" }
+    });
+    fireEvent.change(screen.getByLabelText("Custom candidate reason"), {
+      target: { value: "Team wants to compare another agent framework." }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add custom candidate" }));
+    await waitFor(() => {
+      expect(updateDraftMock).toHaveBeenLastCalledWith(
+        completed.id,
+        expect.objectContaining({
+          custom_candidates: expect.objectContaining({
+            autogen: expect.objectContaining({ repo_full_name: "microsoft/autogen" })
+          })
+        })
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText("Weight for Runtime control and state"), {
+      target: { value: "45" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply Runtime control and state weight" }));
+    await waitFor(() => {
+      expect(updateDraftMock).toHaveBeenLastCalledWith(
+        completed.id,
+        expect.objectContaining({
+          weight_overrides: expect.objectContaining({
+            "Runtime control and state": expect.objectContaining({ weight: 45 })
+          })
+        })
+      );
+      expect(within(screen.getByLabelText("Gap analysis")).getByText(/Changed weights: Runtime control and state/i))
+        .toBeTruthy();
+    });
+
+    expect(createDecisionVersionMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores older same-session draft responses when draft saves resolve out of order", async () => {
+    const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    let workspace = makeCompletedWorkspace(completed);
+    const firstDraftRequest = deferred<Workspace>();
+    const secondDraftRequest = deferred<Workspace>();
+    const draftResponses: Workspace[] = [];
+
+    listSessionsMock.mockImplementation(async () => [completed]);
+    getWorkspaceMock.mockImplementation(async () => workspace);
+    updateDraftMock.mockImplementation(async (_sessionId: string, draft: Phase2Draft) => {
+      const nextWorkspace = makeCompletedWorkspace(completed, {
+        draft,
+        gap_analysis: gapFromDraft(draft)
+      });
+      draftResponses.push(nextWorkspace);
+      if (draftResponses.length === 1) return firstDraftRequest.promise;
+      if (draftResponses.length === 2) return secondDraftRequest.promise;
+      return nextWorkspace;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Must exclude LangGraph" })).toBeTruthy();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Must exclude LangGraph" }));
+      fireEvent.click(screen.getByRole("button", { name: "Must include checkpointing" }));
+    });
+    await waitFor(() => {
+      expect(updateDraftMock).toHaveBeenCalledTimes(2);
+    });
+
+    workspace = draftResponses[1];
+    await act(async () => {
+      secondDraftRequest.resolve(draftResponses[1]);
+      await secondDraftRequest.promise;
+    });
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Gap analysis")).getByText(/Changed constraints: checkpointing/i))
+        .toBeTruthy();
+    });
+
+    await act(async () => {
+      firstDraftRequest.resolve(draftResponses[0]);
+      await firstDraftRequest.promise;
+    });
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Gap analysis")).getByText(/Changed constraints: checkpointing/i))
+        .toBeTruthy();
+      expect(within(screen.getByLabelText("Gap analysis")).queryByText(/Changed candidates: langgraph/i))
+        .toBeNull();
+    });
+  });
+
+  it("creates a Phase 2 version only after draft changes exist", async () => {
+    const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    const queued: DecisionSession = { ...completed, status: "queued", workflow_stage: "queued" };
+    let workspace = makeCompletedWorkspace(completed);
+
+    listSessionsMock.mockImplementation(async () => [workspace.session]);
+    getWorkspaceMock.mockImplementation(async () => workspace);
+    updateDraftMock.mockImplementation(async (_sessionId: string, draft: Phase2Draft) => {
+      workspace = makeCompletedWorkspace(completed, {
+        draft,
+        gap_analysis: gapFromDraft(draft)
+      });
+      return workspace;
+    });
+    createDecisionVersionMock.mockImplementation(async () => makeRunResponse(queued));
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(getTargetedRunButton().disabled).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Exclude LangGraph" }));
+    await waitFor(() => {
+      expect(getTargetedRunButton().disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run targeted re-research" }));
+    await waitFor(() => {
+      expect(createDecisionVersionMock).toHaveBeenCalledWith(completed.id);
+    });
+  });
+
+  it("follows the latest completed version after targeted re-research", async () => {
+    const completedV1 = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    const queued: DecisionSession = { ...completedV1, status: "queued", workflow_stage: "queued" };
+    const completedV2: DecisionSession = {
+      ...completedV1,
+      status: "completed",
+      workflow_stage: "completed",
+      current_summary: "Recommended v2: LangGraph."
+    };
+    const versionOne = makeVersion(1, { session_id: completedV1.id });
+    const versionTwoQueued = makeVersion(2, {
+      session_id: completedV1.id,
+      status: "queued",
+      completed_at: null
+    });
+    const versionTwo = makeVersion(2, {
+      session_id: completedV1.id,
+      adr: "ADR 0002: Recommended v2: LangGraph."
+    });
+    const v1Workspace = makeCompletedWorkspace(completedV1, {
+      versions: [versionOne],
+      active_version: versionOne,
+      draft: makeDraft(versionOne.id)
+    });
+    const queuedWorkspace = makeCompletedWorkspace(queued, {
+      versions: [versionOne, versionTwoQueued],
+      active_version: versionOne,
+      draft: makeDraft(versionOne.id, {
+        candidate_overrides: {
+          langgraph: { action: "exclude", reason: "Recheck alternatives." }
+        }
+      })
+    });
+    const v2Workspace = makeCompletedWorkspace(completedV2, {
+      versions: [versionOne, versionTwo],
+      active_version: versionTwo,
+      draft: makeDraft(versionTwo.id)
+    });
+    let workspace = v1Workspace;
+
+    listSessionsMock.mockImplementation(async () => [workspace.session]);
+    getWorkspaceMock.mockImplementation(async (_sessionId: string, versionId?: string) => {
+      if (versionId === versionOne.id) return v1Workspace;
+      if (versionId === versionTwo.id) return v2Workspace;
+      return workspace;
+    });
+    updateDraftMock.mockImplementation(async (_sessionId: string, draft: Phase2Draft) => {
+      workspace = makeCompletedWorkspace(completedV1, {
+        versions: [versionOne],
+        active_version: versionOne,
+        draft,
+        gap_analysis: gapFromDraft(draft)
+      });
+      return workspace;
+    });
+    createDecisionVersionMock.mockImplementation(async () => {
+      workspace = queuedWorkspace;
+      return makeRunResponse(queued);
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Version 1 completed" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Exclude LangGraph" }));
+    await waitFor(() => {
+      expect(getTargetedRunButton().disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run targeted re-research" }));
+    await waitFor(() => {
+      expect(createDecisionVersionMock).toHaveBeenCalledWith(completedV1.id);
+    });
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v1/i)).toBeTruthy();
+    });
+
+    workspace = v2Workspace;
+    await runPoll();
+
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR 0002/i)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Version 2 completed" })).toBeTruthy();
+    });
+  });
+
+  it("changes ADR with the selected version", async () => {
+    const completed = makeSession("completed", "Recommended: OpenAI Agents SDK.");
+    const versionOne = makeVersion(1, { session_id: completed.id });
+    const versionTwo = makeVersion(2, { session_id: completed.id });
+    const baseWorkspace = makeCompletedWorkspace(completed, {
+      versions: [versionOne, versionTwo],
+      active_version: versionTwo,
+      draft: makeDraft(versionTwo.id)
+    });
+    const versionOneWorkspace = makeCompletedWorkspace(completed, {
+      versions: [versionOne, versionTwo],
+      active_version: versionOne,
+      draft: makeDraft(versionOne.id)
+    });
+    const versionTwoWorkspace = makeCompletedWorkspace(completed, {
+      versions: [versionOne, versionTwo],
+      active_version: versionTwo,
+      draft: makeDraft(versionTwo.id)
+    });
+
+    listSessionsMock.mockImplementation(async () => [completed]);
+    getWorkspaceMock.mockImplementation(async (_sessionId: string, versionId?: string) => {
+      if (versionId === versionOne.id) return versionOneWorkspace;
+      if (versionId === versionTwo.id) return versionTwoWorkspace;
+      return baseWorkspace;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v2/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Version 1 completed" }));
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v1/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Version 2 completed" }));
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v2/i)).toBeTruthy();
+    });
+  });
+
+  it("keeps current version surfaces while a requested version workspace is loading", async () => {
+    const completed = makeSession("completed", "Recommended: OpenAI Agents SDK.");
+    const versionOne = makeVersion(1, { session_id: completed.id });
+    const versionTwo = makeVersion(2, { session_id: completed.id });
+    const versionOneRequest = deferred<Workspace>();
+    const baseWorkspace = makeCompletedWorkspace(completed, {
+      versions: [versionOne, versionTwo],
+      active_version: versionTwo,
+      draft: makeDraft(versionTwo.id)
+    });
+    const versionOneWorkspace = makeCompletedWorkspace(completed, {
+      versions: [versionOne, versionTwo],
+      active_version: versionOne,
+      draft: makeDraft(versionOne.id)
+    });
+
+    listSessionsMock.mockImplementation(async () => [completed]);
+    getWorkspaceMock.mockImplementation(async (_sessionId: string, versionId?: string) => {
+      if (versionId === versionOne.id) return versionOneRequest.promise;
+      return baseWorkspace;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v2/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Version 1 completed" }));
+    expect(within(screen.getByLabelText("ADR")).getByText(/ADR v2/i)).toBeTruthy();
+    await runPoll();
+    expect(within(screen.getByLabelText("ADR")).getByText(/ADR v2/i)).toBeTruthy();
+
+    await act(async () => {
+      versionOneRequest.resolve(versionOneWorkspace);
+      await versionOneRequest.promise;
+    });
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v1/i)).toBeTruthy();
+    });
+  });
+
+  it("keeps the selected version when version workspace requests resolve out of order", async () => {
+    const completed = makeSession("completed", "Recommended: OpenAI Agents SDK.");
+    const versionOne = makeVersion(1, { session_id: completed.id });
+    const versionTwo = makeVersion(2, { session_id: completed.id });
+    const firstVersionRequest = deferred<Workspace>();
+    const secondVersionRequest = deferred<Workspace>();
+    const baseWorkspace = makeCompletedWorkspace(completed, {
+      versions: [versionOne, versionTwo],
+      active_version: versionTwo,
+      draft: makeDraft(versionTwo.id)
+    });
+
+    listSessionsMock.mockImplementation(async () => [completed]);
+    getWorkspaceMock.mockImplementation(async (_sessionId: string, versionId?: string) => {
+      if (versionId === versionOne.id) return firstVersionRequest.promise;
+      if (versionId === versionTwo.id) return secondVersionRequest.promise;
+      return baseWorkspace;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Version 1 completed" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Version 2 completed" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Version 1 completed" }));
+    fireEvent.click(screen.getByRole("button", { name: "Version 2 completed" }));
+
+    await act(async () => {
+      secondVersionRequest.resolve(
+        makeCompletedWorkspace(completed, {
+          versions: [versionOne, versionTwo],
+          active_version: versionTwo,
+          draft: makeDraft(versionTwo.id)
+        })
+      );
+      await secondVersionRequest.promise;
+    });
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v2/i)).toBeTruthy();
+    });
+
+    await act(async () => {
+      firstVersionRequest.resolve(
+        makeCompletedWorkspace(completed, {
+          versions: [versionOne, versionTwo],
+          active_version: versionOne,
+          draft: makeDraft(versionOne.id)
+        })
+      );
+      await firstVersionRequest.promise;
+    });
+
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v2/i)).toBeTruthy();
+      expect(within(screen.getByLabelText("ADR")).queryByText(/ADR v1/i)).toBeNull();
     });
   });
 

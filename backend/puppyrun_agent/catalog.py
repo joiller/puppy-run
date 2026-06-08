@@ -43,16 +43,42 @@ CANDIDATE_REGISTRY: tuple[CandidateProfile, ...] = (
 )
 
 
+def registry_by_slug() -> dict[str, CandidateProfile]:
+    return {candidate.slug: candidate for candidate in CANDIDATE_REGISTRY}
+
+
+def custom_candidate_from_draft(slug: str, payload: dict) -> CandidateProfile:
+    normalized_slug = _normalize_slug(payload.get("slug") or slug)
+    name = _clean_text(payload.get("name")) or normalized_slug
+    repo_full_name = _clean_text(payload.get("repo_full_name"))
+    reason = _clean_text(payload.get("reason"))
+    return CandidateProfile(
+        name=name,
+        slug=normalized_slug,
+        repo_full_name=repo_full_name,
+        capabilities=("custom",),
+        include_reason=reason or f"Included as a custom Phase 2 candidate: {name}.",
+    )
+
+
 def select_candidates(context: dict) -> list[CandidateProfile]:
-    registry_by_slug = {candidate.slug: candidate for candidate in CANDIDATE_REGISTRY}
+    registry = registry_by_slug()
     mentioned = [
         slug
         for slug in context.get("mentioned_candidates", [])
-        if slug in registry_by_slug
+        if slug in registry
     ]
     selected_slugs = set(mentioned)
-    ordered = [registry_by_slug[slug] for slug in mentioned]
+    ordered = [registry[slug] for slug in mentioned]
     ordered.extend(
         candidate for candidate in CANDIDATE_REGISTRY if candidate.slug not in selected_slugs
     )
     return ordered[:3]
+
+
+def _clean_text(value: object) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _normalize_slug(value: object) -> str:
+    return _clean_text(value).lower()

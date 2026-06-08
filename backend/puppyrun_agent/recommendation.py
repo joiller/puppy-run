@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+from typing import Any
 
-from puppyrun_agent.catalog import CandidateProfile
+from puppyrun_agent.catalog import CandidateProfile, registry_by_slug
+from puppyrun_agent.criteria import CriterionProfile
 from puppyrun_agent.github_client import RepositorySummary
 
 
@@ -68,3 +70,198 @@ def build_recommendation(
         ],
     }
     return summary, rationale
+
+
+def build_weighted_recommendation(
+    candidates: list[Any],
+    criteria: list[CriterionProfile],
+    repos: dict[str, RepositorySummary],
+    context: dict,
+    *,
+    version_number: int,
+) -> tuple[str, dict]:
+    if not candidates:
+        raise ValueError("cannot build recommendation without candidates")
+
+    ranked = []
+    for candidate in candidates:
+        slug = _candidate_slug(candidate)
+        repo = _repo_for_candidate(candidate, repos)
+        breakdown = {
+            criterion.name: score_candidate_for_criterion(
+                candidate,
+                criterion,
+                repo,
+                context,
+            )
+            for criterion in criteria
+        }
+        total_weight = sum(max(criterion.weight, 0) for criterion in criteria)
+        weighted_total = 0
+        if total_weight:
+            weighted_total = round(
+                sum(
+                    breakdown[criterion.name]["score"] * max(criterion.weight, 0)
+                    for criterion in criteria
+                )
+                / total_weight
+            )
+        ranked.append(
+            {
+                "slug": slug,
+                "name": _candidate_name(candidate),
+                "repo": _candidate_repo_full_name(candidate, repo),
+                "score": weighted_total,
+                "weighted_score": weighted_total,
+                "score_breakdown": breakdown,
+                "reasons": _top_reasons(breakdown),
+                "selection_state": _value(candidate, "selection_state", "included"),
+                "is_locked": bool(_value(candidate, "is_locked", False)),
+            }
+        )
+
+    ranked.sort(key=lambda item: item["weighted_score"], reverse=True)
+    winner = ranked[0]
+    summary = (
+        f"Recommended v{version_number}: {winner['name']}. It scored "
+        f"{winner['weighted_score']}/100 using selected Phase 2 criteria and weights."
+    )
+    rationale = {
+        "recommended_slug": winner["slug"],
+        "recommended_repo": winner["repo"],
+        "recommended_version": version_number,
+        "ranked_candidates": ranked,
+    }
+    return summary, rationale
+
+
+def score_candidate_for_criterion(
+    candidate: Any,
+    criterion: CriterionProfile,
+    repo: RepositorySummary | None,
+    context: dict,
+) -> dict:
+    capabilities = set(_candidate_capabilities(candidate))
+    constraints = set(context.get("constraints", []))
+    name = criterion.name
+    score = 50
+    explanation = "No strong deterministic fit signal was found."
+
+    if name == "Runtime control and state":
+        if {"checkpointing", "stateful_graph"} & capabilities:
+            score = 100
+            explanation = "Strong runtime state and checkpointing fit."
+        elif {"handoffs", "tool_calling"} & capabilities:
+            score = 65
+            explanation = "Partial runtime fit through handoffs or tool calls."
+    elif name == "Human-in-the-loop fit":
+        if "human_in_loop" in capabilities:
+            score = 100
+            explanation = "Explicit human-in-the-loop capability signal."
+        elif {"guardrails", "handoffs"} & capabilities:
+            score = 85
+            explanation = "Guardrails or handoffs provide review-point fit."
+        else:
+            score = 40
+            explanation = "No explicit approval or handoff signal."
+    elif name == "Observability and traceability":
+        if {"tracing", "guardrails"} & capabilities:
+            score = 100
+            explanation = "Tracing or guardrail capability supports auditability."
+        elif "observability" in constraints:
+            score = 60
+            explanation = "Observability is required, but only indirect signals exist."
+        else:
+            score = 50
+            explanation = "Traceability support needs more evidence."
+    elif name == "Developer ergonomics":
+        if "python" in capabilities:
+            score = 85
+            explanation = "Python support fits the current backend stack."
+        elif "custom" in capabilities:
+            score = 55
+            explanation = "Custom candidate ergonomics need follow-up validation."
+    elif name == "Open-source project health":
+        score, explanation = _project_health_score(repo)
+
+    return {
+        "status": _status_for_score(score),
+        "score": score,
+        "weight": criterion.weight,
+        "explanation": explanation,
+    }
+
+
+def _repo_for_candidate(
+    candidate: Any,
+    repos: dict[str, RepositorySummary],
+) -> RepositorySummary | None:
+    slug = _candidate_slug(candidate)
+    repo_full_name = _candidate_repo_full_name(candidate, None)
+    return repos.get(slug) or repos.get(repo_full_name)
+
+
+def _project_health_score(repo: RepositorySummary | None) -> tuple[int, str]:
+    if repo is None:
+        return 35, "Repository health evidence is missing."
+    if repo.stars >= 20000:
+        return 100, "GitHub metadata shows strong adoption."
+    if repo.stars >= 10000:
+        return 85, "GitHub metadata shows solid adoption."
+    if repo.stars >= 1000:
+        return 70, "GitHub metadata shows moderate adoption."
+    return 45, "GitHub adoption signal is limited."
+
+
+def _status_for_score(score: int) -> str:
+    if score >= 85:
+        return "strong"
+    if score >= 60:
+        return "partial"
+    if score > 0:
+        return "weak"
+    return "unknown"
+
+
+def _top_reasons(breakdown: dict[str, dict]) -> list[str]:
+    strongest = sorted(
+        breakdown.items(),
+        key=lambda item: (item[1]["score"], item[1]["weight"]),
+        reverse=True,
+    )
+    return [f"{name}: {payload['explanation']}" for name, payload in strongest[:2]]
+
+
+def _candidate_capabilities(candidate: Any) -> tuple[str, ...]:
+    capabilities = _value(candidate, "capabilities", ())
+    if isinstance(capabilities, tuple) and capabilities:
+        return capabilities
+    if isinstance(capabilities, list) and capabilities:
+        return tuple(str(capability) for capability in capabilities)
+    registry_candidate = registry_by_slug().get(_candidate_slug(candidate))
+    if registry_candidate is not None:
+        return registry_candidate.capabilities
+    return ()
+
+
+def _candidate_slug(candidate: Any) -> str:
+    return str(_value(candidate, "slug")).strip()
+
+
+def _candidate_name(candidate: Any) -> str:
+    return str(_value(candidate, "name")).strip()
+
+
+def _candidate_repo_full_name(
+    candidate: Any,
+    repo: RepositorySummary | None,
+) -> str:
+    if repo is not None:
+        return repo.full_name
+    return str(_value(candidate, "repo_full_name")).strip()
+
+
+def _value(item: Any, key: str, default: Any = "") -> Any:
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return getattr(item, key, default)

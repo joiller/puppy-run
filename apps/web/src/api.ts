@@ -1,4 +1,4 @@
-import type { DecisionSession, StartAgentRunResponse, Workspace } from "./types";
+import type { DecisionSession, Phase2Draft, StartAgentRunResponse, Workspace } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -27,8 +27,9 @@ export async function createSession(prompt: string): Promise<DecisionSession> {
   });
 }
 
-export async function getWorkspace(sessionId: string): Promise<Workspace> {
-  return request<Workspace>(`/api/v1/sessions/${sessionId}/workspace`);
+export async function getWorkspace(sessionId: string, versionId?: string): Promise<Workspace> {
+  const query = versionId ? `?version_id=${encodeURIComponent(versionId)}` : "";
+  return request<Workspace>(`/api/v1/sessions/${sessionId}/workspace${query}`);
 }
 
 export async function sendMessage(sessionId: string, content: string): Promise<Workspace> {
@@ -38,8 +39,21 @@ export async function sendMessage(sessionId: string, content: string): Promise<W
   });
 }
 
+export async function updateDraft(sessionId: string, draft: Phase2Draft): Promise<Workspace> {
+  return request<Workspace>(`/api/v1/sessions/${sessionId}/draft`, {
+    method: "PATCH",
+    body: JSON.stringify(draft)
+  });
+}
+
 export async function startRun(sessionId: string): Promise<StartAgentRunResponse> {
   return request<StartAgentRunResponse>(`/api/v1/sessions/${sessionId}/runs`, {
+    method: "POST"
+  });
+}
+
+export async function createDecisionVersion(sessionId: string): Promise<StartAgentRunResponse> {
+  return request<StartAgentRunResponse>(`/api/v1/sessions/${sessionId}/versions`, {
     method: "POST"
   });
 }

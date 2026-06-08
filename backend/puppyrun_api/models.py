@@ -2,7 +2,18 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +34,13 @@ class DecisionSessionStatus(StrEnum):
 
 
 class AgentRunStatus(StrEnum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class DecisionVersionStatus(StrEnum):
     queued = "queued"
     running = "running"
     completed = "completed"
@@ -152,6 +170,11 @@ class DecisionSession(Base):
         cascade="all, delete-orphan",
         order_by="DecisionMessage.created_at",
     )
+    versions: Mapped[list["DecisionVersion"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="DecisionVersion.version_number",
+    )
     candidates: Mapped[list["DecisionCandidate"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
@@ -162,6 +185,9 @@ class DecisionSession(Base):
         back_populates="session", cascade="all, delete-orphan"
     )
     recommendations: Mapped[list["Recommendation"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+    score_cells: Mapped[list["ScoreCell"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
     agent_runs: Mapped[list["AgentRun"]] = relationship(
@@ -183,12 +209,59 @@ class DecisionMessage(Base):
     session: Mapped[DecisionSession] = relationship(back_populates="messages")
 
 
+class DecisionVersion(Base):
+    __tablename__ = "decision_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "version_number",
+            name="uq_decision_versions_session_version_number",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[DecisionVersionStatus] = mapped_column(
+        Enum(DecisionVersionStatus, name="decision_version_status"),
+        default=DecisionVersionStatus.queued,
+        nullable=False,
+    )
+    source_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="SET NULL")
+    )
+    change_summary: Mapped[dict] = mapped_column(
+        RecursiveMutableDict.as_mutable(JSON), default=dict, nullable=False
+    )
+    gap_analysis: Mapped[dict] = mapped_column(
+        RecursiveMutableDict.as_mutable(JSON), default=dict, nullable=False
+    )
+    adr: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    session: Mapped[DecisionSession] = relationship(back_populates="versions")
+    candidates: Mapped[list["DecisionCandidate"]] = relationship(back_populates="version")
+    criteria: Mapped[list["DecisionCriterion"]] = relationship(back_populates="version")
+    evidence_items: Mapped[list["EvidenceItem"]] = relationship(back_populates="version")
+    recommendations: Mapped[list["Recommendation"]] = relationship(back_populates="version")
+    score_cells: Mapped[list["ScoreCell"]] = relationship(
+        back_populates="version", cascade="all, delete-orphan"
+    )
+
+
 class DecisionCandidate(Base):
     __tablename__ = "decision_candidates"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="SET NULL")
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     slug: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -199,9 +272,12 @@ class DecisionCandidate(Base):
         RecursiveMutableDict.as_mutable(JSON), default=dict, nullable=False
     )
     score: Mapped[int | None] = mapped_column(Integer)
+    selection_state: Mapped[str] = mapped_column(String(40), default="included", nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     session: Mapped[DecisionSession] = relationship(back_populates="candidates")
+    version: Mapped[DecisionVersion | None] = relationship(back_populates="candidates")
 
 
 class DecisionCriterion(Base):
@@ -211,13 +287,18 @@ class DecisionCriterion(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
     )
+    decision_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="SET NULL")
+    )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     weight: Mapped[int] = mapped_column(nullable=False)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_needed: Mapped[str] = mapped_column(Text, nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     session: Mapped[DecisionSession] = relationship(back_populates="criteria")
+    version: Mapped[DecisionVersion | None] = relationship(back_populates="criteria")
 
 
 class EvidenceItem(Base):
@@ -226,6 +307,9 @@ class EvidenceItem(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="SET NULL")
     )
     candidate_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("decision_candidates.id", ondelete="SET NULL")
@@ -244,6 +328,7 @@ class EvidenceItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     session: Mapped[DecisionSession] = relationship(back_populates="evidence_items")
+    version: Mapped[DecisionVersion | None] = relationship(back_populates="evidence_items")
 
 
 class Recommendation(Base):
@@ -252,6 +337,9 @@ class Recommendation(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="SET NULL")
     )
     recommended_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("decision_candidates.id", ondelete="SET NULL")
@@ -263,6 +351,37 @@ class Recommendation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     session: Mapped[DecisionSession] = relationship(back_populates="recommendations")
+    version: Mapped[DecisionVersion | None] = relationship(back_populates="recommendations")
+
+
+class ScoreCell(Base):
+    __tablename__ = "score_cells"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    criterion_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_criteria.id", ondelete="CASCADE"), nullable=False
+    )
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_item_ids: Mapped[list] = mapped_column(
+        RecursiveMutableList.as_mutable(JSON), default=list, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    session: Mapped[DecisionSession] = relationship(back_populates="score_cells")
+    version: Mapped[DecisionVersion] = relationship(back_populates="score_cells")
+    candidate: Mapped[DecisionCandidate] = relationship()
+    criterion: Mapped[DecisionCriterion] = relationship()
 
 
 class AgentRun(Base):

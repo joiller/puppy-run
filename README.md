@@ -6,6 +6,8 @@ The first demo workflow focuses on AI Agent technology stack selection. The firs
 
 Phase 1 adds the first real online Agent workflow: a deterministic Agent-framework selection thin slice with clarification, candidate discovery, criteria generation, public GitHub repository analysis, a basic recommendation, and trace events.
 
+Phase 2 adds the interactive decision workbench: versioned recommendations, explicit candidate and constraint controls, criteria weight editing, pre-rerun gap analysis, targeted GitHub-only re-research, score cells, an evidence drawer, and ADR views.
+
 To increase GitHub API rate limits in a public deployment, set `PUPPYRUN_GITHUB_TOKEN` in the deployment environment. The token is optional for local smoke tests and must not be committed.
 
 Phase 0 remains closed at the repository scope: the local deployable skeleton and the temporary VPS public demo loop have both been verified.
@@ -15,6 +17,7 @@ Phase 0 remains closed at the repository scope: the local deployable skeleton an
 - [PuppyRun design spec](docs/superpowers/specs/2026-05-21-puppyrun-design.md)
 - [Phase 0 implementation plan](docs/superpowers/plans/2026-05-21-puppyrun-phase-0-plan.md)
 - [Phase 1 implementation plan](docs/superpowers/plans/2026-05-27-puppyrun-phase-1-plan.md)
+- [Phase 2 implementation plan](docs/superpowers/plans/2026-06-04-puppyrun-phase-2-plan.md)
 - [Accepted debt](docs/accepted-debt.md)
 - [VPS public demo deployment design](docs/superpowers/specs/2026-05-23-puppyrun-public-demo-deployment-design.md)
 - [VPS public demo deployment plan](docs/superpowers/plans/2026-05-23-puppyrun-public-demo-deployment-plan.md)
@@ -98,6 +101,57 @@ Manual browser acceptance:
 3. Answer the clarification prompt.
 4. Click `Run Phase 1 Agent`.
 5. Without clicking `Refresh`, wait for polling to update the selected session to `completed` and show the recommendation, evidence, and trace.
+
+## Phase 2 Local Smoke
+
+Run backend checks:
+
+```bash
+cd backend
+. .venv/bin/activate
+ruff check .
+pytest -q
+```
+
+Run frontend checks:
+
+```bash
+cd apps/web
+npm test -- --run
+npm run build
+```
+
+Start or refresh the local stack:
+
+```bash
+test -f .env || cp .env.example .env
+docker compose up --build -d
+curl http://localhost:8000/health
+docker compose ps
+```
+
+Expected health response:
+
+```json
+{"status":"ok","service":"puppyrun-api"}
+```
+
+Manual Phase 2 browser acceptance at `http://localhost:5173`:
+
+1. Create a session with a prompt comparing LangGraph, OpenAI Agents SDK, CrewAI, and AutoGen for a Python web Agent runtime that needs checkpointing, human approval, and traceable tool calls.
+2. Answer the clarification prompt with checkpointing, human approval, Python preference, and observability priority.
+3. Click `Run Phase 1 Agent` and wait for `completed`.
+4. Confirm the version rail shows `v1`.
+5. Use workbench controls to require `checkpointing`.
+6. Set `Runtime control and state` weight to `40`.
+7. Add custom candidate `AutoGen` with slug `autogen` and repository `microsoft/autogen`.
+8. Confirm gap analysis lists changed candidate `autogen`, changed constraint `checkpointing`, changed weight `Runtime control and state`, and one required GitHub fetch.
+9. Click `Run targeted re-research` and wait for `completed`.
+10. Confirm the version rail shows `v1` and active `v2`.
+11. Confirm the recommendation starts with `Recommended v2:`.
+12. Confirm the evidence matrix has clickable score cells and a clicked cell opens the evidence drawer.
+13. Confirm the ADR view starts with `ADR 0002:`.
+14. Confirm trace includes `phase2_started`, `targeted_research_planned`, and `recommendation_version_created`.
 
 Public URL status:
 
