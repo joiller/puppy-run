@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.12, FastAPI, SQLAlchemy 2, Alembic, arq, httpx, PostgreSQL, Redis, React 19, TypeScript, Vite, Vitest, Testing Library, Docker Compose.
 
+**Closure status, 2026-06-08:** Phase 2 implemented and verified locally with backend tests, frontend tests, production build, Docker Compose, and browser smoke test. Public VPS redeployment status is recorded separately because real public hosts and SSH targets are private operational details.
+
 ---
 
 ## Merge Note

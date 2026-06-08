@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from puppyrun_agent.clarification import update_context_with_answer
 from puppyrun_agent.phase2 import (
     apply_phase2_constraints,
     apply_phase2_criteria,
@@ -95,10 +96,11 @@ async def append_user_message(db: AsyncSession, session_id: UUID, content: str) 
         raise ValueError(f"decision session not found: {session_id}")
 
     stripped_content = content.strip()
-    context = session.decision_context
+    context = update_context_with_answer(dict(session.decision_context or {}), stripped_content)
     clarification = context.setdefault("clarification", {})
     clarification["status"] = "answered"
     clarification["answer"] = stripped_content
+    session.decision_context = context
     session.workflow_stage = "ready_for_research"
 
     db.add(DecisionMessage(session_id=session.id, role="user", content=stripped_content))

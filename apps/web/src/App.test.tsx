@@ -677,6 +677,96 @@ describe("App", () => {
     });
   });
 
+  it("follows the latest completed version after targeted re-research", async () => {
+    const completedV1 = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    const queued: DecisionSession = { ...completedV1, status: "queued", workflow_stage: "queued" };
+    const completedV2: DecisionSession = {
+      ...completedV1,
+      status: "completed",
+      workflow_stage: "completed",
+      current_summary: "Recommended v2: LangGraph."
+    };
+    const versionOne = makeVersion(1, { session_id: completedV1.id });
+    const versionTwoQueued = makeVersion(2, {
+      session_id: completedV1.id,
+      status: "queued",
+      completed_at: null
+    });
+    const versionTwo = makeVersion(2, {
+      session_id: completedV1.id,
+      adr: "ADR 0002: Recommended v2: LangGraph."
+    });
+    const v1Workspace = makeCompletedWorkspace(completedV1, {
+      versions: [versionOne],
+      active_version: versionOne,
+      draft: makeDraft(versionOne.id)
+    });
+    const queuedWorkspace = makeCompletedWorkspace(queued, {
+      versions: [versionOne, versionTwoQueued],
+      active_version: versionOne,
+      draft: makeDraft(versionOne.id, {
+        candidate_overrides: {
+          langgraph: { action: "exclude", reason: "Recheck alternatives." }
+        }
+      })
+    });
+    const v2Workspace = makeCompletedWorkspace(completedV2, {
+      versions: [versionOne, versionTwo],
+      active_version: versionTwo,
+      draft: makeDraft(versionTwo.id)
+    });
+    let workspace = v1Workspace;
+
+    listSessionsMock.mockImplementation(async () => [workspace.session]);
+    getWorkspaceMock.mockImplementation(async (_sessionId: string, versionId?: string) => {
+      if (versionId === versionOne.id) return v1Workspace;
+      if (versionId === versionTwo.id) return v2Workspace;
+      return workspace;
+    });
+    updateDraftMock.mockImplementation(async (_sessionId: string, draft: Phase2Draft) => {
+      workspace = makeCompletedWorkspace(completedV1, {
+        versions: [versionOne],
+        active_version: versionOne,
+        draft,
+        gap_analysis: gapFromDraft(draft)
+      });
+      return workspace;
+    });
+    createDecisionVersionMock.mockImplementation(async () => {
+      workspace = queuedWorkspace;
+      return makeRunResponse(queued);
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Version 1 completed" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Exclude LangGraph" }));
+    await waitFor(() => {
+      expect(getTargetedRunButton().disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run targeted re-research" }));
+    await waitFor(() => {
+      expect(createDecisionVersionMock).toHaveBeenCalledWith(completedV1.id);
+    });
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR v1/i)).toBeTruthy();
+    });
+
+    workspace = v2Workspace;
+    await runPoll();
+
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("ADR")).getByText(/ADR 0002/i)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Version 2 completed" })).toBeTruthy();
+    });
+  });
+
   it("changes ADR with the selected version", async () => {
     const completed = makeSession("completed", "Recommended: OpenAI Agents SDK.");
     const versionOne = makeVersion(1, { session_id: completed.id });

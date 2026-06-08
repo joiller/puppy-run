@@ -485,7 +485,7 @@ def test_adr_builder_returns_required_sections_and_evidence_links() -> None:
         score_cells,
     )
 
-    assert adr["title"] == "ADR v2: Recommended v2: LangGraph."
+    assert adr["title"] == "ADR 0002: Recommended v2: LangGraph."
     body = adr["body"]
     for section in [
         "## Context",

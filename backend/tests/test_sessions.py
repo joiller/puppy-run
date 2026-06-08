@@ -116,6 +116,42 @@ async def test_answer_clarification_marks_session_ready(session_client: AsyncCli
 
 
 @pytest.mark.asyncio
+async def test_answer_clarification_persists_detected_constraints(
+    session_client: AsyncClient,
+) -> None:
+    create_response = await session_client.post(
+        "/api/v1/sessions",
+        json={
+            "prompt": (
+                "Compare LangGraph, OpenAI Agents SDK, CrewAI, and AutoGen for a Python web "
+                "Agent runtime that must support checkpointing, human approval, and traceable "
+                "tool calls."
+            )
+        },
+    )
+    session_id = create_response.json()["id"]
+
+    answer_response = await session_client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "content": (
+                "Must support checkpointing and human approval. Python is preferred. "
+                "Observability matters more than popularity."
+            )
+        },
+    )
+
+    assert answer_response.status_code == 201
+    context = answer_response.json()["session"]["decision_context"]
+    assert set(context["constraints"]) >= {
+        "checkpointing",
+        "human_in_loop",
+        "observability",
+        "python",
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_missing_session_workspace_returns_404(session_client: AsyncClient) -> None:
     response = await session_client.get(
         "/api/v1/sessions/00000000-0000-0000-0000-000000000001/workspace"

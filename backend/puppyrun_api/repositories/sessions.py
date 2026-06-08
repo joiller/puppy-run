@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from puppyrun_agent.clarification import build_initial_context, build_initial_question
 from puppyrun_agent.phase2 import normalize_phase2_draft
 from puppyrun_api.models import (
     AgentEvent,
@@ -26,29 +27,28 @@ def derive_title(prompt: str) -> str:
 
 
 def build_initial_decision_context(prompt: str) -> dict:
+    context = build_initial_context(prompt)
     return {
-        "domain": "agent_framework_selection",
+        **context,
         "original_prompt": prompt,
         "clarification": {
             "status": "pending",
-            "question": "Which constraints matter most for this Agent runtime decision?",
+            "question": build_initial_question(context),
         },
     }
 
 
-def build_initial_clarification_message() -> str:
-    return (
-        "Before I compare the options, which constraints matter most: runtime language, "
-        "durable checkpoints, human approval steps, deployment shape, tracing, or team familiarity?"
-    )
+def build_initial_clarification_message(context: dict) -> str:
+    return str(context["clarification"]["question"])
 
 
 async def create_decision_session(db: AsyncSession, prompt: str) -> DecisionSession:
+    decision_context = build_initial_decision_context(prompt)
     session = DecisionSession(
         title=derive_title(prompt),
         prompt=prompt,
         workflow_stage="clarifying",
-        decision_context=build_initial_decision_context(prompt),
+        decision_context=decision_context,
     )
     db.add(session)
     await db.flush()
@@ -56,7 +56,7 @@ async def create_decision_session(db: AsyncSession, prompt: str) -> DecisionSess
         DecisionMessage(
             session_id=session.id,
             role="assistant",
-            content=build_initial_clarification_message(),
+            content=build_initial_clarification_message(decision_context),
         )
     )
     await db.commit()

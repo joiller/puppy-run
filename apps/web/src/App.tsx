@@ -129,6 +129,12 @@ export default function App() {
   }
 
   function applyWorkspace(nextWorkspace: Workspace, requestedVersionId: string | null = null) {
+    const nextActiveVersion = nextWorkspace.active_version ?? latestVersion(nextWorkspace);
+    const nextSelectedVersionId =
+      requestedVersionId ??
+      (selectedVersionIdRef.current === null && nextWorkspace.session.status !== "completed"
+        ? null
+        : nextActiveVersion?.id ?? null);
     setWorkspace(nextWorkspace);
     selectSession(nextWorkspace.session);
     setSessions((currentSessions) => {
@@ -140,9 +146,7 @@ export default function App() {
         session.id === nextWorkspace.session.id ? nextWorkspace.session : session
       );
     });
-    setSelectedVersionId(
-      requestedVersionId ?? nextWorkspace.active_version?.id ?? latestVersion(nextWorkspace)?.id ?? null
-    );
+    setSelectedVersionId(nextSelectedVersionId);
     setWeightDrafts(
       Object.fromEntries(nextWorkspace.criteria.map((criterion) => [criterion.name, String(criterion.weight)]))
     );

@@ -239,7 +239,7 @@ def build_adr(
     gap_analysis: Mapping[str, Any],
     score_cells: Iterable[Mapping[str, Any]],
 ) -> dict:
-    title = f"ADR v{version_number}: {summary}"
+    title = f"ADR {version_number:04d}: {summary}"
     ranked_candidates = _as_list(rationale.get("ranked_candidates"))
     evidence_links = _adr_evidence_links(score_cells)
     body = "\n\n".join(
