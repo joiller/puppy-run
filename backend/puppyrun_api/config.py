@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     cors_origins: list[AnyHttpUrl] = Field(default_factory=list)
     github_token: str | None = None
     github_api_base_url: str = "https://api.github.com"
+    tool_timeout_seconds: int = 10
+    tool_retry_count: int = 1
 
     @property
     def sqlalchemy_database_url(self) -> str:
