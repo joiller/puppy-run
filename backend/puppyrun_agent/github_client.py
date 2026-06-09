@@ -76,3 +76,42 @@ class GitHubClient:
             pushed_at=payload.get("pushed_at") or "",
             license_spdx_id=license_payload.get("spdx_id"),
         )
+
+    async def fetch_issue_signals(self, repo_full_name: str, *, limit: int = 5) -> list[dict]:
+        response = await self._client.get(
+            f"/repos/{repo_full_name}/issues",
+            params={"state": "all", "per_page": limit},
+        )
+        response.raise_for_status()
+        issues = []
+        for item in response.json():
+            if item.get("pull_request"):
+                continue
+            issues.append(
+                {
+                    "source_url": item.get("html_url") or "",
+                    "title": item.get("title") or "GitHub issue",
+                    "summary": item.get("body") or item.get("title") or "",
+                    "state": item.get("state"),
+                    "comments": int(item.get("comments") or 0),
+                }
+            )
+            if len(issues) >= limit:
+                break
+        return issues
+
+    async def fetch_release_signals(self, repo_full_name: str, *, limit: int = 5) -> list[dict]:
+        response = await self._client.get(
+            f"/repos/{repo_full_name}/releases",
+            params={"per_page": limit},
+        )
+        response.raise_for_status()
+        return [
+            {
+                "source_url": item.get("html_url") or "",
+                "title": item.get("name") or item.get("tag_name") or "GitHub release",
+                "summary": item.get("body") or item.get("name") or item.get("tag_name") or "",
+                "tag_name": item.get("tag_name"),
+            }
+            for item in response.json()[:limit]
+        ]

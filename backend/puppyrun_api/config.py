@@ -28,8 +28,15 @@ class Settings(BaseSettings):
     cors_origins: list[AnyHttpUrl] = Field(default_factory=list)
     github_token: str | None = None
     github_api_base_url: str = "https://api.github.com"
+    llm_provider: str = "deterministic"
+    openai_model: str = "gpt-5.5"
+    openai_api_key: str | None = None
+    openai_base_url: str | None = None
+    tavily_api_key: str | None = None
+    enable_reddit: bool = False
     tool_timeout_seconds: int = 10
     tool_retry_count: int = 1
+    phase3_max_results_per_source: int = 5
 
     @property
     def sqlalchemy_database_url(self) -> str:
