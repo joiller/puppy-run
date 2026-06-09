@@ -19,10 +19,16 @@ git status --short --branch
 git rev-parse HEAD
 git log --oneline --decorate -n 8
 git rev-parse main
-git merge-base --is-ancestor codex/phase2 main
+git log --oneline --decorate -n 12 main
+git cat-file -e main:docs/superpowers/plans/2026-06-04-puppyrun-phase-2-plan.md
+git cat-file -e main:docs/superpowers/plans/2026-06-08-puppyrun-phase-3-plan.md
 ```
 
 At plan-writing time, Phase 2 is locally documented as closed in `docs/superpowers/plans/2026-06-04-puppyrun-phase-2-plan.md`, and `main` already contains the Phase 2 merge. Re-verify that before creating `codex/phase3`.
+
+If `codex/phase2` still exists, the controller may additionally run `git merge-base --is-ancestor codex/phase2 main`. Do not require that branch to exist after it has been merged and intentionally deleted.
+
+This plan may be authored on the closing Phase 2 branch before the plan commit itself reaches `main`. If `git cat-file -e main:docs/superpowers/plans/2026-06-08-puppyrun-phase-3-plan.md` fails while the current branch contains only this plan update on top of the merged Phase 2 work, first merge or cherry-pick the plan commit into `main`, then create `codex/phase3` from the updated `main`. Do not start Phase 3 implementation from a branch that cannot read this plan file.
 
 ## Scope
 
@@ -131,13 +137,17 @@ git status --short --branch
 git rev-parse HEAD
 git log --oneline --decorate -n 8
 git rev-parse main
-git merge-base --is-ancestor codex/phase2 main
+git log --oneline --decorate -n 12 main
+git cat-file -e main:docs/superpowers/plans/2026-06-04-puppyrun-phase-2-plan.md
+git cat-file -e main:docs/superpowers/plans/2026-06-08-puppyrun-phase-3-plan.md
 ```
 
 Expected:
 
 - Worktree is clean.
 - Phase 2 is merged into `main`.
+- This Phase 3 plan is readable from `main`; if it is not, synchronize the plan commit into `main` and repeat the baseline audit.
+- If `codex/phase2` no longer exists because it was intentionally deleted after merge, that is acceptable.
 - Current implementation branch is created from `main`, not from stale detached state.
 
 - [ ] **Step 2: Create or switch to Phase 3 branch**
@@ -147,8 +157,11 @@ Run:
 ```bash
 git switch main
 git pull --ff-only
+git cat-file -e HEAD:docs/superpowers/plans/2026-06-08-puppyrun-phase-3-plan.md
 git switch -c codex/phase3
 ```
+
+If the `git cat-file` check fails, stop and synchronize this plan into `main` before creating `codex/phase3`.
 
 If `codex/phase3` already exists, inspect it first:
 
@@ -224,6 +237,9 @@ Model requirements:
 - `VerificationTask` stores `candidate_id`, `risk_signal_id`, `status`, `verification_question`, `stronger_source_type`, `stronger_source_url`, `verdict`, `rationale`, `payload`.
 - Use JSON columns with the repo's existing recursive mutable JSON helpers where mutation tracking is needed.
 - Add relationships back to `DecisionSession` and `DecisionVersion`.
+- Add foreign keys to the existing session, version, candidate, criterion, evidence, and risk-signal tables where the corresponding ID fields are present.
+- Add indexes for `session_id`, `decision_version_id`, candidate lookups, risk status/severity lookups, and tool-call status/source lookups.
+- Make `ToolCall.idempotency_key` unique for the scope the runtime uses for deduplication; tests should prove duplicate runtime execution does not create duplicate trace rows.
 
 - [ ] **Step 3: Add Alembic migration**
 
@@ -497,7 +513,9 @@ Adapters:
 - `ArxivAdapter`
 - `RedditAdapter`
 
-All adapters must run through Tool Runtime and return skipped results instead of raising for missing optional credentials.
+Adapters should be pure async source clients that return normalized evidence results. Do not make adapters persist database rows or import `ToolRuntime` directly.
+
+Workflow integration must register and invoke adapters through `ToolRuntime` so timeout, retry, idempotency, sanitized persistence, and skipped results are handled consistently. Adapter unit tests may call adapters directly with mocked HTTP clients; workflow tests must prove they are invoked through the runtime path.
 
 - [ ] **Step 5: Verify adapter tests**
 
@@ -713,9 +731,9 @@ Test behaviors:
 
 - Phase 1 creates claims, risk signals, verification tasks, tool calls, and Phase 3 events.
 - Phase 2 creates versioned Phase 3 rows for the new version.
-- Phase 2 reuses unchanged evidence where possible.
+- Phase 2 reuses unchanged evidence where possible without mutating prior completed versions.
 - Missing Tavily/OpenAI/Reddit credentials skip gracefully.
-- Confirmed high risk changes candidate score and recommendation rationale.
+- Confirmed high risk produces machine-readable risk adjustment data for the current version.
 - Failed Phase 3 source or provider work records sanitized failure detail without hiding prior completed versions.
 
 Run:
@@ -743,6 +761,12 @@ Create `EvidenceItem` rows for normalized source results. Credibility tiers:
 - `medium`: GitHub issues/PRs, technical blogs, papers, benchmarks.
 - `low`: Reddit, Hacker News, Stack Overflow comments, community discussion.
 
+Reuse rule for Phase 2 reruns:
+
+- Reuse is allowed only when candidate slug, `repo_full_name`, source profile query, source type, source URL, and content hash are unchanged.
+- If repo, source profile, query, URL, or content hash changes, collect fresh evidence for that candidate/source.
+- Reused evidence must remain version-safe: create or link rows for the new `decision_version_id` without mutating prior completed version rows. Store provenance in payload when a row reuses prior content.
+
 - [ ] **Step 4: Extract claims and risks**
 
 Persist events:
@@ -765,7 +789,9 @@ Persist event:
 
 - `risk_adjusted_scores`
 
-Update candidate scores and recommendation rationale. Do not allow risk adjustment to make score negative.
+Apply score adjustments to the current version's candidate score data and persist machine-readable fields such as base score, risk adjustment, capped adjustment, and adjusted score. Do not allow risk adjustment to make score negative.
+
+Task 8 owns workflow data flow and persisted adjustment facts only. Task 9 owns final recommendation rationale wording, score-cell explanation text, and ADR risk-section formatting.
 
 - [ ] **Step 7: Preserve Phase 2 failure semantics**
 
@@ -812,6 +838,7 @@ Test behaviors:
 - Score-cell explanations include confirmed risk impact when relevant.
 - ADR risk section includes confirmed, contradicted, and unresolved risks.
 - Unverified risks appear in risk panel data but do not change scores.
+- No new workflow orchestration, source collection, or Phase 3 persistence behavior is introduced here; this task consumes the machine-readable risk adjustment facts produced by Task 8.
 
 Run:
 
