@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. The intended controller flow is one implementer, one spec-compliance reviewer, and one code-quality reviewer per task.
 
+**Closure status, 2026-06-10:** Phase 3 implemented and verified locally with backend tests, frontend tests, production build, Docker Compose, and browser smoke test. Live OpenAI/Tavily smoke status is recorded separately because credentials are private operational details.
+
 **Goal:** Implement full Phase 3 evidence and risk verification for PuppyRun: external evidence collection, claim extraction, risk clustering, verification tasks, credibility scoring, conservative score impact, and workbench UI visibility.
 
 **Architecture:** Extend the existing modular monolith with a foundation-first sequence: versioned risk data models, Tool Runtime, source adapters, LLM provider abstraction, workflow/scoring integration, and workbench UI extensions. Preserve the existing Phase 1 and Phase 2 decision-version workflow, stale-response protections, and failure semantics. Do not add MCP adapters, eval dashboard, auth/RBAC/billing, private repo access, SSE/WebSockets, or export jobs in this phase.

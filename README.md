@@ -8,7 +8,11 @@ Phase 1 adds the first real online Agent workflow: a deterministic Agent-framewo
 
 Phase 2 adds the interactive decision workbench: versioned recommendations, explicit candidate and constraint controls, criteria weight editing, pre-rerun gap analysis, targeted GitHub-only re-research, score cells, an evidence drawer, and ADR views.
 
+Phase 3 adds evidence and risk verification: versioned tool-call traces, source evidence, extracted claims, risk signals, verification tasks, conservative confirmed-risk score adjustments, risk-aware recommendation/ADR output, and workbench panels for risk details and source filtering.
+
 To increase GitHub API rate limits in a public deployment, set `PUPPYRUN_GITHUB_TOKEN` in the deployment environment. The token is optional for local smoke tests and must not be committed.
+
+Phase 3 uses `PUPPYRUN_LLM_PROVIDER=deterministic` by default, so no-key local and Docker smoke tests do not make live LLM calls. Optional live extraction uses `PUPPYRUN_LLM_PROVIDER=openai`, `PUPPYRUN_OPENAI_API_KEY`, and `PUPPYRUN_TAVILY_API_KEY`; keep credential values in private local environment files or shell exports only. Reddit collection is gated by `PUPPYRUN_ENABLE_REDDIT=false` and remains disabled by default.
 
 Phase 0 remains closed at the repository scope: the local deployable skeleton and the temporary VPS public demo loop have both been verified.
 
@@ -18,6 +22,7 @@ Phase 0 remains closed at the repository scope: the local deployable skeleton an
 - [Phase 0 implementation plan](docs/superpowers/plans/2026-05-21-puppyrun-phase-0-plan.md)
 - [Phase 1 implementation plan](docs/superpowers/plans/2026-05-27-puppyrun-phase-1-plan.md)
 - [Phase 2 implementation plan](docs/superpowers/plans/2026-06-04-puppyrun-phase-2-plan.md)
+- [Phase 3 implementation plan](docs/superpowers/plans/2026-06-08-puppyrun-phase-3-plan.md)
 - [Accepted debt](docs/accepted-debt.md)
 - [VPS public demo deployment design](docs/superpowers/specs/2026-05-23-puppyrun-public-demo-deployment-design.md)
 - [VPS public demo deployment plan](docs/superpowers/plans/2026-05-23-puppyrun-public-demo-deployment-plan.md)
@@ -152,6 +157,46 @@ Manual Phase 2 browser acceptance at `http://localhost:5173`:
 12. Confirm the evidence matrix has clickable score cells and a clicked cell opens the evidence drawer.
 13. Confirm the ADR view starts with `ADR 0002:`.
 14. Confirm trace includes `phase2_started`, `targeted_research_planned`, and `recommendation_version_created`.
+
+## Phase 3 Local Smoke
+
+Deterministic no-key smoke uses the default `.env.example` values and does not make live LLM, Tavily, or Reddit calls:
+
+```bash
+test -f .env || cp .env.example .env
+docker compose up --build -d
+curl http://localhost:8000/health
+docker compose ps
+```
+
+Expected health response:
+
+```json
+{"status":"ok","service":"puppyrun-api"}
+```
+
+For optional live OpenAI and Tavily smoke, keep credentials outside committed files and run the backend/worker with these private environment variables set:
+
+```bash
+PUPPYRUN_LLM_PROVIDER=openai
+PUPPYRUN_OPENAI_API_KEY=<private value>
+PUPPYRUN_TAVILY_API_KEY=<private value>
+PUPPYRUN_ENABLE_REDDIT=false
+```
+
+Expected Phase 3 browser acceptance at `http://localhost:5173`:
+
+1. Create a session comparing LangGraph, OpenAI Agents SDK, CrewAI, AutoGen, and Dify.
+2. Answer clarification with checkpointing, human approval, Python preference, observability priority, and maintenance/community-risk concerns.
+3. Click `Run Phase 1 Agent` and wait for `completed`.
+4. Confirm the version rail shows `v1`.
+5. Confirm the workbench shows the risk panel, claims, verification tasks, tool calls, source filters, adjusted recommendation rationale, and ADR risk output.
+6. Confirm skipped provider/tool state is visible when optional sources are disabled or missing credentials.
+7. Make a Phase 2 edit that triggers targeted re-research.
+8. Click `Run targeted re-research` and wait for `completed`.
+9. Confirm `v2` contains versioned Phase 3 rows and `v1` remains readable from the version rail.
+
+Only confirmed risks affect scores, capped conservatively. Contradicted, unresolved, and unverified risks remain visible but do not change score. Reddit remains gated and disabled by default; do not enable it without a deliberate private local setup.
 
 Public URL status:
 
