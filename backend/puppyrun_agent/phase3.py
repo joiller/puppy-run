@@ -245,6 +245,14 @@ def build_candidate_risk_adjustments(risk_signals: Iterable[Mapping[str, Any]]) 
     return adjustments
 
 
+def build_risk_panel_data(risk_signals: Iterable[Mapping[str, Any]]) -> dict:
+    visible_risks = [dict(risk) for risk in risk_signals]
+    return {
+        "risk_signals": visible_risks,
+        "risk_adjustments": build_candidate_risk_adjustments(visible_risks),
+    }
+
+
 def _claim_dicts(claims: list[ExtractedClaim], evidence_items: list[dict]) -> list[dict]:
     rows = []
     for claim in claims:

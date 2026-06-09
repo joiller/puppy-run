@@ -439,6 +439,116 @@ def test_score_cells_use_same_context_as_weighted_recommendation() -> None:
     assert score_breakdown["score"] == 60
 
 
+def test_weighted_recommendation_surfaces_phase3_risk_adjustments() -> None:
+    criteria = generate_criteria({"constraints": ["observability"]})
+    context = {
+        "constraints": ["observability"],
+        "phase3_risk_adjustments": {
+            "openai_agents_sdk": {
+                "risk_adjustment": -15,
+                "uncapped_risk_adjustment": -21,
+                "confirmed_risk_count": 3,
+            }
+        },
+        "phase3_risk_signals": [
+            {
+                "candidate_slug": "openai_agents_sdk",
+                "status": "confirmed",
+                "severity": "high",
+                "title": "Maintenance Risk",
+                "summary": "Confirmed maintenance incidents.",
+                "score_impact": -8,
+            },
+            {
+                "candidate_slug": "openai_agents_sdk",
+                "status": "unresolved",
+                "severity": "medium",
+                "title": "Migration Uncertainty",
+                "summary": "Migration support needs stronger evidence.",
+                "score_impact": 0,
+            },
+            {
+                "candidate_slug": "openai_agents_sdk",
+                "status": "contradicted",
+                "severity": "low",
+                "title": "Documentation Gap",
+                "summary": "Official docs contradicted the risk.",
+                "score_impact": 0,
+            },
+        ],
+    }
+
+    summary, rationale = build_weighted_recommendation(
+        [
+            registry_by_slug()["langgraph"],
+            registry_by_slug()["openai_agents_sdk"],
+        ],
+        criteria,
+        {
+            "langgraph": _repo("langchain-ai/langgraph", stars=14000),
+            "openai_agents_sdk": _repo("openai/openai-agents-python", stars=25000),
+        },
+        context,
+        version_number=3,
+    )
+
+    openai_rank = next(
+        candidate
+        for candidate in rationale["ranked_candidates"]
+        if candidate["slug"] == "openai_agents_sdk"
+    )
+    assert "risk-adjusted" in summary
+    assert openai_rank["base_weighted_score"] > openai_rank["weighted_score"]
+    assert openai_rank["risk_adjustment"] == -15
+    assert openai_rank["confirmed_risks"] == ["Maintenance Risk"]
+    assert openai_rank["unresolved_risks"] == ["Migration Uncertainty"]
+    assert openai_rank["contradicted_risks"] == ["Documentation Gap"]
+
+
+def test_score_cells_append_confirmed_phase3_risk_impact() -> None:
+    context = {
+        "constraints": ["observability"],
+        "phase3_risk_signals": [
+            {
+                "candidate_slug": "crewai",
+                "status": "confirmed",
+                "severity": "high",
+                "title": "Maintenance Risk",
+                "summary": "Confirmed maintenance incidents.",
+                "score_impact": -8,
+            },
+            {
+                "candidate_slug": "langgraph",
+                "status": "unverified",
+                "severity": "high",
+                "title": "Community Concern",
+                "summary": "Community-only concern.",
+                "score_impact": 0,
+            },
+        ],
+    }
+    criterion = next(
+        criterion
+        for criterion in generate_criteria(context)
+        if criterion.name == "Observability and traceability"
+    )
+
+    cells = build_score_cells(
+        [registry_by_slug()["crewai"], registry_by_slug()["langgraph"]],
+        [criterion],
+        {
+            "crewai": _repo("crewAIInc/crewAI", stars=3000),
+            "langgraph": _repo("langchain-ai/langgraph", stars=14000),
+        },
+        {},
+        context=context,
+    )
+    explanations = {cell["candidate_slug"]: cell["explanation"] for cell in cells}
+
+    assert "Confirmed risk impact -8: Maintenance Risk." in explanations["crewai"]
+    assert "Community Concern" not in explanations["langgraph"]
+
+
 def test_adr_builder_returns_required_sections_and_evidence_links() -> None:
     score_cells = [
         {
@@ -499,6 +609,76 @@ def test_adr_builder_returns_required_sections_and_evidence_links() -> None:
         assert section in body
     assert "https://github.com/langchain-ai/langgraph" in body
     assert "microsoft/autogen" in body
+
+
+def test_adr_builder_includes_phase3_risk_sections_and_score_impact() -> None:
+    adr = build_adr(
+        3,
+        "Recommended v3: LangGraph.",
+        {
+            "ranked_candidates": [
+                {"slug": "langgraph", "name": "LangGraph", "weighted_score": 88},
+                {"slug": "crewai", "name": "CrewAI", "weighted_score": 74},
+            ]
+        },
+        {
+            "changed_candidates": [],
+            "changed_constraints": [],
+            "changed_weights": [],
+            "risk_adjusted_scores": {
+                "crewai": {
+                    "base_score": 82,
+                    "risk_adjustment": -8,
+                    "adjusted_score": 74,
+                }
+            },
+            "phase3_risk_signals": [
+                {
+                    "candidate_slug": "crewai",
+                    "status": "confirmed",
+                    "title": "Maintenance Risk",
+                    "summary": "Confirmed maintenance incidents.",
+                    "score_impact": -8,
+                    "payload": {
+                        "supporting_source_urls": ["https://github.example/crewai/issues"]
+                    },
+                },
+                {
+                    "candidate_slug": "langgraph",
+                    "status": "contradicted",
+                    "title": "Documentation Gap",
+                    "summary": "Official docs contradicted the concern.",
+                    "score_impact": 0,
+                    "payload": {
+                        "verification_rationale": "Official docs document the behavior."
+                    },
+                },
+                {
+                    "candidate_slug": "openai_agents_sdk",
+                    "status": "unresolved",
+                    "title": "Migration Uncertainty",
+                    "summary": "Stronger evidence remains missing.",
+                    "score_impact": 0,
+                    "payload": {
+                        "stronger_source_type": "official_docs",
+                        "stronger_source_url": "https://docs.example/openai-agents",
+                    },
+                },
+            ],
+        },
+        [],
+    )
+
+    assert "Confirmed risks" in adr["body"]
+    assert "CrewAI: Maintenance Risk" in adr["body"]
+    assert "https://github.example/crewai/issues" in adr["body"]
+    assert "Contradicted risks" in adr["body"]
+    assert "LangGraph: Documentation Gap" in adr["body"]
+    assert "Official docs document the behavior." in adr["body"]
+    assert "Unresolved risks" in adr["body"]
+    assert "OpenAI Agents SDK: Migration Uncertainty" in adr["body"]
+    assert "official_docs https://docs.example/openai-agents" in adr["body"]
+    assert "CrewAI: 82 -> 74 (-8)" in adr["body"]
 
 
 def _repo(

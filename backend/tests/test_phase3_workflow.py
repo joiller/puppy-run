@@ -198,9 +198,15 @@ async def test_phase2_workflow_creates_versioned_phase3_rows_and_reuse_provenanc
 
     async with maker() as db:
         version = await db.get(DecisionVersion, version_id)
+        parent_session = await db.get(DecisionSession, session_id)
         assert version is not None
+        assert parent_session is not None
         assert version.status == DecisionVersionStatus.completed
         assert version.gap_analysis["risk_adjusted_scores"]
+        assert "phase3_risk_signals" not in version.gap_analysis
+        assert "phase3_risk_signals" not in parent_session.decision_context[
+            "phase2_gap_analysis"
+        ]
         langgraph_scores = version.gap_analysis["risk_adjusted_scores"]["langgraph"]
         assert langgraph_scores["base_score"] > 0
         assert langgraph_scores["adjusted_score"] == max(

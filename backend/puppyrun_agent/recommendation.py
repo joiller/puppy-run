@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -84,6 +85,7 @@ def build_weighted_recommendation(
         raise ValueError("cannot build recommendation without candidates")
 
     ranked = []
+    has_phase3_risks = _has_phase3_risk_context(context)
     for candidate in candidates:
         slug = _candidate_slug(candidate)
         repo = _repo_for_candidate(candidate, repos)
@@ -106,26 +108,44 @@ def build_weighted_recommendation(
                 )
                 / total_weight
             )
-        ranked.append(
-            {
-                "slug": slug,
-                "name": _candidate_name(candidate),
-                "repo": _candidate_repo_full_name(candidate, repo),
-                "score": weighted_total,
-                "weighted_score": weighted_total,
-                "score_breakdown": breakdown,
-                "reasons": _top_reasons(breakdown),
-                "selection_state": _value(candidate, "selection_state", "included"),
-                "is_locked": bool(_value(candidate, "is_locked", False)),
-            }
-        )
+        risk_summary = _phase3_risk_summary(slug, context) if has_phase3_risks else {}
+        risk_adjustment = int(risk_summary.get("risk_adjustment", 0))
+        adjusted_total = max(0, weighted_total + risk_adjustment)
+        row = {
+            "slug": slug,
+            "name": _candidate_name(candidate),
+            "repo": _candidate_repo_full_name(candidate, repo),
+            "score": adjusted_total,
+            "weighted_score": adjusted_total,
+            "score_breakdown": breakdown,
+            "reasons": _top_reasons(breakdown),
+            "selection_state": _value(candidate, "selection_state", "included"),
+            "is_locked": bool(_value(candidate, "is_locked", False)),
+        }
+        if has_phase3_risks:
+            row.update(
+                {
+                    "base_weighted_score": weighted_total,
+                    "risk_adjustment": risk_adjustment,
+                    "confirmed_risks": risk_summary["confirmed_risks"],
+                    "unresolved_risks": risk_summary["unresolved_risks"],
+                    "contradicted_risks": risk_summary["contradicted_risks"],
+                }
+            )
+        ranked.append(row)
 
     ranked.sort(key=lambda item: item["weighted_score"], reverse=True)
     winner = ranked[0]
-    summary = (
-        f"Recommended v{version_number}: {winner['name']}. It scored "
-        f"{winner['weighted_score']}/100 using selected Phase 2 criteria and weights."
-    )
+    if has_phase3_risks:
+        summary = (
+            f"Recommended v{version_number}: {winner['name']}. It scored "
+            f"{winner['weighted_score']}/100 after Phase 3 risk-adjusted scoring."
+        )
+    else:
+        summary = (
+            f"Recommended v{version_number}: {winner['name']}. It scored "
+            f"{winner['weighted_score']}/100 using selected Phase 2 criteria and weights."
+        )
     rationale = {
         "recommended_slug": winner["slug"],
         "recommended_repo": winner["repo"],
@@ -232,6 +252,46 @@ def _top_reasons(breakdown: dict[str, dict]) -> list[str]:
     return [f"{name}: {payload['explanation']}" for name, payload in strongest[:2]]
 
 
+def _has_phase3_risk_context(context: Mapping[str, Any]) -> bool:
+    return bool(context.get("phase3_risk_adjustments") or context.get("phase3_risk_signals"))
+
+
+def _phase3_risk_summary(slug: str, context: Mapping[str, Any]) -> dict:
+    risk_adjustments = context.get("phase3_risk_adjustments")
+    adjustment_payload = (
+        risk_adjustments.get(slug, {})
+        if isinstance(risk_adjustments, Mapping)
+        else {}
+    )
+    risks = [
+        risk
+        for risk in _list_value(context.get("phase3_risk_signals"))
+        if isinstance(risk, Mapping) and _normalize_slug(risk.get("candidate_slug")) == slug
+    ]
+    return {
+        "risk_adjustment": int(adjustment_payload.get("risk_adjustment") or 0),
+        "confirmed_risks": _risk_titles(risks, "confirmed"),
+        "unresolved_risks": _risk_titles(risks, "unresolved"),
+        "contradicted_risks": _risk_titles(risks, "contradicted"),
+    }
+
+
+def _risk_titles(risks: list[Mapping[str, Any]], status: str) -> list[str]:
+    return [
+        str(risk.get("title") or risk.get("risk_key") or "Risk").strip()
+        for risk in risks
+        if risk.get("status") == status
+    ]
+
+
+def _list_value(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return []
+
+
 def _candidate_capabilities(candidate: Any) -> tuple[str, ...]:
     capabilities = _value(candidate, "capabilities", ())
     if isinstance(capabilities, tuple) and capabilities:
@@ -246,6 +306,10 @@ def _candidate_capabilities(candidate: Any) -> tuple[str, ...]:
 
 def _candidate_slug(candidate: Any) -> str:
     return str(_value(candidate, "slug")).strip()
+
+
+def _normalize_slug(value: Any) -> str:
+    return str(value or "").strip().lower()
 
 
 def _candidate_name(candidate: Any) -> str:

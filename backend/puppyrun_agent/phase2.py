@@ -219,13 +219,18 @@ def build_score_cells(
                 repo,
                 scoring_context,
             )
+            explanation = score["explanation"] + _phase3_risk_cell_note(
+                candidate_slug,
+                criterion_profile.name,
+                scoring_context,
+            )
             cells.append(
                 {
                     "candidate_slug": candidate_slug,
                     "criterion_name": criterion_profile.name,
                     "status": score["status"],
                     "score": score["score"],
-                    "explanation": score["explanation"],
+                    "explanation": explanation,
                     "evidence_refs": evidence_refs,
                 }
             )
@@ -455,6 +460,19 @@ def _adr_rationale(ranked_candidates: list[Any]) -> str:
 
 
 def _adr_risks(gap_analysis: Mapping[str, Any]) -> str:
+    phase3_risks = [
+        risk for risk in _as_list(gap_analysis.get("phase3_risk_signals"))
+        if isinstance(risk, Mapping)
+    ]
+    if phase3_risks:
+        return "\n\n".join(
+            [
+                "### Confirmed risks\n" + _adr_risk_lines(phase3_risks, "confirmed"),
+                "### Contradicted risks\n" + _adr_risk_lines(phase3_risks, "contradicted"),
+                "### Unresolved risks\n" + _adr_risk_lines(phase3_risks, "unresolved"),
+                "### Score impact summary\n" + _adr_score_impact_lines(gap_analysis),
+            ]
+        )
     research_tasks = _as_list(gap_analysis.get("research_tasks"))
     if not research_tasks:
         return "- No unresolved research tasks were identified by gap analysis."
@@ -464,6 +482,99 @@ def _adr_risks(gap_analysis: Mapping[str, Any]) -> str:
         for task in research_tasks
         if isinstance(task, Mapping)
     )
+
+
+def _phase3_risk_cell_note(
+    candidate_slug: str,
+    criterion_name: str,
+    context: Mapping[str, Any],
+) -> str:
+    notes = []
+    for risk in _as_list(context.get("phase3_risk_signals")):
+        if not isinstance(risk, Mapping):
+            continue
+        if _normalize_slug(risk.get("candidate_slug")) != candidate_slug:
+            continue
+        if risk.get("status") != "confirmed":
+            continue
+        risk_criterion = _clean_text(risk.get("criterion_name"))
+        if risk_criterion and risk_criterion != criterion_name:
+            continue
+        title = _clean_text(risk.get("title") or risk.get("risk_key") or "Risk")
+        impact = int(risk.get("score_impact") or 0)
+        notes.append(f"Confirmed risk impact {impact}: {title}.")
+    return f" {' '.join(notes)}" if notes else ""
+
+
+def _adr_risk_lines(risks: list[Mapping[str, Any]], status: str) -> str:
+    lines = []
+    for risk in risks:
+        if risk.get("status") != status:
+            continue
+        candidate = _candidate_label(_clean_text(risk.get("candidate_slug")))
+        title = _clean_text(risk.get("title") or risk.get("risk_key") or "Risk")
+        summary = _clean_text(risk.get("summary"))
+        impact = int(risk.get("score_impact") or 0)
+        evidence_urls = _risk_evidence_urls(risk)
+        impact_text = f" ({impact})" if status == "confirmed" and impact else ""
+        evidence_text = f" Evidence: {', '.join(evidence_urls)}." if evidence_urls else ""
+        detail_text = _risk_status_detail(risk, status)
+        lines.append(
+            f"- {candidate}: {title}{impact_text}. {summary}"
+            f"{evidence_text}{detail_text}"
+        )
+    return "\n".join(lines) if lines else "- None."
+
+
+def _adr_score_impact_lines(gap_analysis: Mapping[str, Any]) -> str:
+    score_data = _as_mapping(gap_analysis.get("risk_adjusted_scores"))
+    lines = []
+    for slug, payload in sorted(score_data.items()):
+        if not isinstance(payload, Mapping):
+            continue
+        risk_adjustment = int(payload.get("risk_adjustment") or 0)
+        if risk_adjustment == 0:
+            continue
+        candidate = _candidate_label(_clean_text(slug))
+        lines.append(
+            f"- {candidate}: {int(payload.get('base_score') or 0)} -> "
+            f"{int(payload.get('adjusted_score') or 0)} ({risk_adjustment})"
+        )
+    return "\n".join(lines) if lines else "- No confirmed risk score impact."
+
+
+def _risk_evidence_urls(risk: Mapping[str, Any]) -> list[str]:
+    payload = _as_mapping(risk.get("payload"))
+    urls = payload.get("supporting_source_urls")
+    return [_clean_text(url) for url in _as_list(urls) if _clean_text(url)]
+
+
+def _risk_status_detail(risk: Mapping[str, Any], status: str) -> str:
+    payload = _as_mapping(risk.get("payload"))
+    if status == "contradicted":
+        rationale = _clean_text(payload.get("verification_rationale"))
+        return f" Rationale: {rationale}." if rationale else ""
+    if status == "unresolved":
+        source_type = _clean_text(payload.get("stronger_source_type"))
+        source_url = _clean_text(payload.get("stronger_source_url"))
+        if source_type or source_url:
+            target = " ".join(part for part in [source_type, source_url] if part)
+            return f" Missing stronger evidence: {target}."
+    return ""
+
+
+def _candidate_label(slug: str) -> str:
+    known = {
+        "openai_agents_sdk": "OpenAI Agents SDK",
+        "langgraph": "LangGraph",
+        "crewai": "CrewAI",
+        "autogen": "AutoGen",
+        "dify": "Dify",
+    }
+    normalized = _normalize_slug(slug)
+    if normalized in known:
+        return known[normalized]
+    return " ".join(part.capitalize() for part in normalized.split("_") if part) or slug
 
 
 def _adr_evidence_links(score_cells: Iterable[Mapping[str, Any]]) -> list[dict]:

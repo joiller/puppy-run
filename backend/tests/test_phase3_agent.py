@@ -8,6 +8,7 @@ from puppyrun_agent.llm_providers import (
 )
 from puppyrun_agent.phase3 import (
     build_candidate_risk_adjustments,
+    build_risk_panel_data,
     build_risk_verification_pipeline,
     normalize_evidence_items,
 )
@@ -164,6 +165,26 @@ def test_risk_adjustments_only_count_confirmed_risks_and_cap_per_candidate() -> 
     }
     assert adjustments["langgraph"]["risk_adjustment"] == 0
     assert adjustments["autogen"]["risk_adjustment"] == 0
+
+
+def test_unverified_risks_remain_visible_without_score_adjustment() -> None:
+    panel = build_risk_panel_data(
+        [
+            {
+                "candidate_slug": "crewai",
+                "risk_key": "community_risk",
+                "title": "Community Concern",
+                "summary": "Community-only concern.",
+                "status": "unverified",
+                "severity": "high",
+                "score_impact": 0,
+            }
+        ]
+    )
+
+    assert panel["risk_signals"][0]["status"] == "unverified"
+    assert panel["risk_signals"][0]["title"] == "Community Concern"
+    assert panel["risk_adjustments"]["crewai"]["risk_adjustment"] == 0
 
 
 def test_pipeline_groups_by_normalized_risk_key() -> None:

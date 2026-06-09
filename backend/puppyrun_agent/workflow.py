@@ -676,6 +676,59 @@ async def _persist_phase3_risks_and_tasks(
     return risk_models, task_models
 
 
+async def _phase3_presentation_snapshot(db: AsyncSession, version_id: UUID) -> dict:
+    risk_rows = list(
+        (
+            await db.execute(
+                select(RiskSignal)
+                .where(RiskSignal.decision_version_id == version_id)
+                .order_by(RiskSignal.created_at.asc(), RiskSignal.id.asc())
+            )
+        ).scalars()
+    )
+    task_rows = list(
+        (
+            await db.execute(
+                select(VerificationTask)
+                .where(VerificationTask.decision_version_id == version_id)
+                .order_by(VerificationTask.created_at.asc(), VerificationTask.id.asc())
+            )
+        ).scalars()
+    )
+    candidate_ids = {risk.candidate_id for risk in risk_rows}
+    candidates = list(
+        (
+            await db.execute(
+                select(DecisionCandidate).where(DecisionCandidate.id.in_(candidate_ids))
+            )
+        ).scalars()
+    ) if candidate_ids else []
+    candidate_slug_by_id = {str(candidate.id): candidate.slug for candidate in candidates}
+    task_by_risk_id = {str(task.risk_signal_id): task for task in task_rows}
+    risk_signals = []
+    for risk in risk_rows:
+        task = task_by_risk_id.get(str(risk.id))
+        payload = dict(risk.payload or {})
+        if task is not None:
+            payload["verification_rationale"] = task.rationale
+            payload["stronger_source_type"] = task.stronger_source_type
+            payload["stronger_source_url"] = task.stronger_source_url
+        risk_signals.append(
+            {
+                "candidate_slug": candidate_slug_by_id.get(str(risk.candidate_id), ""),
+                "risk_key": risk.risk_key,
+                "title": risk.title,
+                "summary": risk.summary,
+                "severity": risk.severity,
+                "status": risk.status,
+                "credibility": risk.credibility,
+                "score_impact": risk.score_impact,
+                "payload": payload,
+            }
+        )
+    return {"phase3_risk_signals": risk_signals}
+
+
 def _phase3_reuse_map(
     previous_evidence: list[EvidenceItem],
 ) -> dict[tuple[str, str, str, str, str, str], EvidenceItem]:
@@ -736,6 +789,18 @@ def _apply_phase3_adjustments_to_candidate_models(
         metrics["phase3_risk_adjustment"] = payload
         candidate.health_metrics = metrics
         candidate.score = int(payload["adjusted_score"])
+
+
+def _phase3_decision_context(context: dict, gap_analysis: dict | None) -> dict:
+    phase3_context = dict(context)
+    gap = dict(gap_analysis or {})
+    if "phase3_risk_adjustments" in gap:
+        phase3_context["phase3_risk_adjustments"] = gap["phase3_risk_adjustments"]
+    elif "risk_adjusted_scores" in gap:
+        phase3_context["phase3_risk_adjustments"] = gap["risk_adjusted_scores"]
+    if "phase3_risk_signals" in gap:
+        phase3_context["phase3_risk_signals"] = gap["phase3_risk_signals"]
+    return phase3_context
 
 
 def _apply_phase3_adjustments_to_scored(
@@ -1053,12 +1118,42 @@ async def _persist_phase2_success(
         evidence_id_by_source_url[evidence_model.source_url] = str(evidence_model.id)
 
     criteria_profiles = [_criterion_profile(criterion) for criterion in criteria]
+    _base_summary, base_rationale = build_weighted_recommendation(
+        candidates,
+        criteria_profiles,
+        repos,
+        effective_context,
+        version_number=version.version_number,
+    )
+    base_scores_by_slug = {
+        _normalize_slug(candidate["slug"]): int(candidate["weighted_score"])
+        for candidate in base_rationale["ranked_candidates"]
+    }
+    for slug, score in base_scores_by_slug.items():
+        candidate_models_by_slug[slug].score = score
+
+    await _run_phase3_steps(
+        db,
+        run,
+        session.id,
+        version,
+        candidate_models_by_slug,
+        repos,
+        previous_evidence=previous_evidence,
+        fail_on_provider_error=True,
+    )
+    phase3_presentation = await _phase3_presentation_snapshot(db, version.id)
+    presentation_gap_analysis = {
+        **dict(version.gap_analysis or gap_analysis),
+        **phase3_presentation,
+    }
+    risk_context = _phase3_decision_context(effective_context, presentation_gap_analysis)
     score_cells = build_score_cells(
         candidates,
         criteria_profiles,
         repos,
         evidence_refs_by_candidate,
-        context=effective_context,
+        context=risk_context,
     )
     for cell in score_cells:
         candidate_model = candidate_models_by_slug[_normalize_slug(cell["candidate_slug"])]
@@ -1084,27 +1179,9 @@ async def _persist_phase2_success(
         candidates,
         criteria_profiles,
         repos,
-        effective_context,
+        risk_context,
         version_number=version.version_number,
     )
-    base_scores_by_slug = {
-        _normalize_slug(candidate["slug"]): int(candidate["weighted_score"])
-        for candidate in rationale["ranked_candidates"]
-    }
-    for slug, score in base_scores_by_slug.items():
-        candidate_models_by_slug[slug].score = score
-
-    risk_score_data = await _run_phase3_steps(
-        db,
-        run,
-        session.id,
-        version,
-        candidate_models_by_slug,
-        repos,
-        previous_evidence=previous_evidence,
-        fail_on_provider_error=True,
-    )
-    rationale = _apply_phase3_adjustments_to_weighted_rationale(rationale, risk_score_data)
     adjusted_scores_by_slug = {
         _normalize_slug(candidate["slug"]): int(candidate["weighted_score"])
         for candidate in rationale["ranked_candidates"]
@@ -1134,7 +1211,7 @@ async def _persist_phase2_success(
         version.version_number,
         summary,
         rationale,
-        gap_analysis,
+        presentation_gap_analysis,
         score_cells,
     )
     version.adr = f"{adr['title']}\n\n{adr['body']}"
@@ -1147,7 +1224,7 @@ async def _persist_phase2_success(
         session.workflow_stage = "completed"
         session.current_summary = summary
         context.pop("phase2_draft", None)
-        context["phase2_gap_analysis"] = gap_analysis
+        context["phase2_gap_analysis"] = dict(version.gap_analysis or gap_analysis)
         session.decision_context = context
     else:
         await _release_stale_phase2_session_state(db, session, run.id)
