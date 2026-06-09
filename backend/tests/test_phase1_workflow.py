@@ -129,8 +129,15 @@ async def test_phase1_workflow_persists_candidates_evidence_and_recommendation()
         ]
         assert len((await db.execute(select(DecisionCriterion))).scalars().all()) == 5
         evidence_items = (await db.execute(select(EvidenceItem))).scalars().all()
-        assert len(evidence_items) == 3
-        for evidence in evidence_items:
+        repo_evidence = [
+            evidence for evidence in evidence_items if evidence.source_type == "github_repo"
+        ]
+        phase3_evidence = [
+            evidence for evidence in evidence_items if evidence.source_type == "github_issue"
+        ]
+        assert len(repo_evidence) == 3
+        assert len(phase3_evidence) == 3
+        for evidence in repo_evidence:
             assert evidence.source_type == "github_repo"
             assert evidence.candidate_id is not None
             linked_candidate = candidate_by_id[evidence.candidate_id]
@@ -158,14 +165,20 @@ async def test_phase1_workflow_persists_candidates_evidence_and_recommendation()
                 await db.execute(select(AgentEvent).order_by(AgentEvent.created_at))
             ).scalars()
         ]
-        assert event_types == [
+        assert event_types[:5] == [
             "phase1_started",
             "criteria_generated",
             "github_repo_analyzed",
             "github_repo_analyzed",
             "github_repo_analyzed",
-            "recommendation_generated",
         ]
+        assert "phase3_sources_planned" in event_types
+        assert "claims_extracted" in event_types
+        assert "risks_clustered" in event_types
+        assert "verification_tasks_created" in event_types
+        assert "risk_verification_completed" in event_types
+        assert "risk_adjusted_scores" in event_types
+        assert event_types[-1] == "recommendation_generated"
 
     await engine.dispose()
 
