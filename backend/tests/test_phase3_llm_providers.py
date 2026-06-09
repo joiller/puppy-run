@@ -1,0 +1,252 @@
+import json
+
+import pytest
+
+from puppyrun_agent.llm_providers import (
+    DeterministicLLMProvider,
+    ExtractedClaim,
+    ExtractedClaims,
+    OpenAILLMProvider,
+    ProviderResponseError,
+    ProviderUnavailableError,
+    RiskClusters,
+    VerificationVerdict,
+)
+
+
+def _evidence() -> list[dict]:
+    return [
+        {
+            "candidate_slug": "langgraph",
+            "source_type": "official_docs",
+            "source_url": "https://docs.example/langgraph",
+            "title": "LangGraph docs",
+            "summary": "Official docs describe checkpointing and recovery support.",
+            "citation_text": "Checkpointing and recovery are documented.",
+            "credibility": "high",
+        },
+        {
+            "candidate_slug": "crewai",
+            "source_type": "hacker_news",
+            "source_url": "https://news.ycombinator.com/item?id=1",
+            "title": "CrewAI discussion",
+            "summary": "Community discussion reports maintenance risk and stale issues.",
+            "citation_text": "Maintenance risk and stale issues.",
+            "credibility": "low",
+        },
+    ]
+
+
+def test_deterministic_provider_returns_stable_valid_outputs() -> None:
+    provider = DeterministicLLMProvider()
+
+    first = provider.extract_claims(_evidence())
+    second = provider.extract_claims(_evidence())
+    risks = provider.cluster_risks(first.claims)
+    plans = provider.plan_verification(risks.risks)
+    verdict = provider.verify_risk(
+        risks.risks[0],
+        stronger_evidence=[
+            {
+                "source_type": "official_docs",
+                "source_url": "https://docs.example/crewai",
+                "summary": "Official docs do not mention stale maintenance.",
+            }
+        ],
+    )
+
+    assert first == second
+    assert isinstance(first, ExtractedClaims)
+    assert isinstance(risks, RiskClusters)
+    assert isinstance(verdict, VerificationVerdict)
+    assert [claim.candidate_slug for claim in first.claims] == ["langgraph", "crewai"]
+    assert risks.risks[0].status == "unverified"
+    assert plans.tasks[0].stronger_source_type == "official_docs"
+    assert verdict.verdict in {"confirmed", "contradicted", "unresolved"}
+
+
+def test_deterministic_provider_does_not_confirm_low_trust_community_risk() -> None:
+    provider = DeterministicLLMProvider()
+
+    claims = provider.extract_claims([_evidence()[1]])
+    risks = provider.cluster_risks(claims.claims)
+
+    assert risks.risks[0].status == "unverified"
+
+
+class FakeResponses:
+    def __init__(
+        self,
+        output_payload: dict | None = None,
+        *,
+        response_payload: dict | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.output_payload = output_payload
+        self.response_payload = response_payload
+        self.error = error
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        if self.response_payload is not None:
+            return self.response_payload
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(self.output_payload),
+                        }
+                    ],
+                }
+            ]
+        }
+
+
+class FakeClient:
+    def __init__(
+        self,
+        output_payload: dict | None = None,
+        *,
+        response_payload: dict | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.responses = FakeResponses(
+            output_payload,
+            response_payload=response_payload,
+            error=error,
+        )
+
+
+def test_openai_provider_builds_responses_structured_output_request() -> None:
+    client = FakeClient(
+        {
+            "claims": [
+                {
+                    "candidate_slug": "langgraph",
+                    "source_type": "official_docs",
+                    "source_url": "https://docs.example/langgraph",
+                    "title": "Docs claim",
+                    "summary": "Official docs support checkpointing.",
+                    "citation_text": "Checkpointing docs.",
+                    "credibility": "high",
+                    "confidence": 90,
+                }
+            ]
+        }
+    )
+    provider = OpenAILLMProvider(
+        api_key="test-key",
+        model="gpt-5.5",
+        client=client,
+    )
+
+    claims = provider.extract_claims(_evidence())
+    call = client.responses.calls[0]
+
+    assert claims.claims[0].candidate_slug == "langgraph"
+    assert call["model"] == "gpt-5.5"
+    assert call["store"] is False
+    assert call["text"]["format"]["type"] == "json_schema"
+    assert call["text"]["format"]["strict"] is True
+    assert call["text"]["format"]["name"] == "ExtractedClaims"
+    schema = call["text"]["format"]["schema"]
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["claims"]
+    claim_schema = schema["$defs"]["ExtractedClaim"]
+    assert claim_schema["additionalProperties"] is False
+    assert set(claim_schema["required"]) == set(claim_schema["properties"])
+    serialized_schema = json.dumps(schema)
+    assert "default" not in serialized_schema
+    assert "maxLength" not in serialized_schema
+    assert "Do not include secrets" in call["instructions"]
+    assert call["input"][-1]["role"] == "user"
+
+
+def test_openai_provider_demotes_confirmed_community_only_risk() -> None:
+    client = FakeClient(
+        {
+            "risks": [
+                {
+                    "candidate_slug": "crewai",
+                    "risk_key": "maintenance",
+                    "title": "Maintenance Risk",
+                    "summary": "Community discussion reports stale maintenance.",
+                    "severity": "medium",
+                    "status": "confirmed",
+                    "credibility": "high",
+                    "supporting_claim_indexes": [],
+                }
+            ]
+        }
+    )
+    provider = OpenAILLMProvider(api_key="test-key", model="gpt-5.5", client=client)
+    low_trust_claim = ExtractedClaim(
+        candidate_slug="crewai",
+        source_type="hacker_news",
+        source_url="https://news.ycombinator.com/item?id=1",
+        title="CrewAI discussion",
+        summary="Community discussion reports stale maintenance.",
+        citation_text="Maintenance risk.",
+        credibility="low",
+        confidence=55,
+        risk_key="maintenance",
+    )
+
+    risks = provider.cluster_risks([low_trust_claim])
+
+    assert risks.risks[0].status == "unverified"
+
+
+def test_openai_provider_converts_refusal_to_sanitized_provider_error() -> None:
+    client = FakeClient(
+        response_payload={
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "refusal",
+                            "refusal": "Cannot process token=secret-token-value.",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    provider = OpenAILLMProvider(api_key="test-key", model="gpt-5.5", client=client)
+
+    with pytest.raises(ProviderResponseError) as exc_info:
+        provider.extract_claims(_evidence())
+
+    message = str(exc_info.value)
+    assert "refused" in message
+    assert "secret-token-value" not in message
+    assert "[redacted]" in message
+
+
+def test_openai_provider_sanitizes_api_errors() -> None:
+    client = FakeClient(error=RuntimeError("upstream api_key=secret-api-key failed"))
+    provider = OpenAILLMProvider(api_key="test-key", model="gpt-5.5", client=client)
+
+    with pytest.raises(ProviderResponseError) as exc_info:
+        provider.extract_claims(_evidence())
+
+    message = str(exc_info.value)
+    assert "OpenAI response request failed" in message
+    assert "secret-api-key" not in message
+    assert "[redacted]" in message
+
+
+def test_openai_provider_does_not_run_without_api_key() -> None:
+    provider = OpenAILLMProvider(api_key=None, model="gpt-5.5", client=FakeClient({}))
+
+    with pytest.raises(ProviderUnavailableError):
+        provider.extract_claims(_evidence())
