@@ -18,7 +18,18 @@ import type {
   StartAgentRunResponse,
   Workspace
 } from "./types";
-import { activeRecommendation, evidenceForScoreCell, gapSummary, latestVersion, scoreCellFor } from "./workbench";
+import {
+  activeRecommendation,
+  activeRiskSignals,
+  claimsSupportingRisk,
+  evidenceForScoreCell,
+  gapSummary,
+  latestVersion,
+  riskSummaryCounts,
+  scoreCellFor,
+  toolCallsGroupedByStatusAndSource,
+  verificationTasksForRisk
+} from "./workbench";
 
 vi.mock("./api", () => ({
   createDecisionVersion: vi.fn(),
@@ -213,6 +224,10 @@ function makeWorkspace(
     candidates: [],
     criteria: [],
     evidence_items: [],
+    tool_calls: [],
+    claims: [],
+    risk_signals: [],
+    verification_tasks: [],
     score_cells: [],
     recommendations: [],
     events: []
@@ -324,6 +339,320 @@ function makeCompletedWorkspace(session: DecisionSession, overrides: Partial<Wor
   };
 }
 
+function makePhase3Workspace(session: DecisionSession): Workspace {
+  const version = makeVersion(1, { session_id: session.id });
+  const workspace = makeCompletedWorkspace(session, {
+    versions: [version],
+    active_version: version,
+    draft: makeDraft(version.id)
+  });
+  const candidateId = workspace.candidates[0].id;
+  return {
+    ...workspace,
+    evidence_items: [
+      ...workspace.evidence_items,
+      {
+        id: "evidence-github-risk",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        criterion_id: null,
+        source_type: "github_issue",
+        source_url: "https://github.com/langchain-ai/langgraph/issues/321",
+        title: "GitHub issue: stale checkpoint bug",
+        summary: "Maintainers confirmed checkpoint state can be stale after interrupted runs.",
+        credibility: "high",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "evidence-reddit-risk",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        criterion_id: null,
+        source_type: "reddit",
+        source_url: "https://reddit.com/r/agents/comments/example",
+        title: "Community thread: stalled LangGraph releases",
+        summary: "Community users report stalled release cadence for long-running Agent workflows.",
+        credibility: "low",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "evidence-docs-risk",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        criterion_id: null,
+        source_type: "official_docs",
+        source_url: "https://langchain-ai.github.io/langgraph/concepts/persistence/",
+        title: "Official docs: checkpoint durability",
+        summary: "Official docs describe supported persistence semantics for checkpoints.",
+        credibility: "high",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z"
+      }
+    ],
+    tool_calls: [
+      {
+        id: "tool-call-1",
+        session_id: session.id,
+        decision_version_id: version.id,
+        tool_name: "phase3_candidate_sources",
+        status: "completed",
+        idempotency_key: "phase3:sources:langgraph",
+        source_type: "github_issue",
+        source_url: "https://github.com/langchain-ai/langgraph/issues",
+        request_summary: "Collect GitHub issue source snippets for LangGraph.",
+        response_summary: "Collected 1 GitHub issue source.",
+        payload: {},
+        error: null,
+        started_at: "2026-05-27T00:00:00Z",
+        completed_at: "2026-05-27T00:00:01Z",
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:01Z"
+      },
+      {
+        id: "tool-call-2",
+        session_id: session.id,
+        decision_version_id: version.id,
+        tool_name: "phase3_reddit_search",
+        status: "skipped",
+        idempotency_key: "phase3:reddit:langgraph",
+        source_type: "reddit",
+        source_url: null,
+        request_summary: "Search Reddit for LangGraph risk reports.",
+        response_summary: "Skipped because Reddit search is disabled.",
+        payload: {},
+        error: null,
+        started_at: null,
+        completed_at: "2026-05-27T00:00:02Z",
+        created_at: "2026-05-27T00:00:02Z",
+        updated_at: "2026-05-27T00:00:02Z"
+      }
+    ],
+    claims: [
+      {
+        id: "claim-confirmed",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        criterion_id: null,
+        source_evidence_item_id: "evidence-github-risk",
+        source_type: "github_issue",
+        source_url: "https://github.com/langchain-ai/langgraph/issues/321",
+        title: "Checkpoint bug is confirmed",
+        summary: "Checkpoint state can be stale after interrupted runs.",
+        citation_text: "Maintainers confirmed stale checkpoint state after interrupts.",
+        credibility: "high",
+        confidence: 88,
+        content_hash: "claim-confirmed-hash",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "claim-contradicted",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        criterion_id: null,
+        source_evidence_item_id: "evidence-docs-risk",
+        source_type: "official_docs",
+        source_url: "https://langchain-ai.github.io/langgraph/concepts/persistence/",
+        title: "Durability concern is contradicted",
+        summary: "Official docs document supported checkpoint durability.",
+        citation_text: "Persistence docs describe durable checkpoint writes.",
+        credibility: "high",
+        confidence: 81,
+        content_hash: "claim-contradicted-hash",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "claim-unresolved",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        criterion_id: null,
+        source_evidence_item_id: "evidence-reddit-risk",
+        source_type: "reddit",
+        source_url: "https://reddit.com/r/agents/comments/example",
+        title: "Release cadence is unresolved",
+        summary: "Community users report stalled releases for long-running workflows.",
+        citation_text: "Multiple users mention delayed releases.",
+        credibility: "low",
+        confidence: 54,
+        content_hash: "claim-unresolved-hash",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "claim-unverified",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        criterion_id: null,
+        source_evidence_item_id: "evidence-reddit-risk",
+        source_type: "reddit",
+        source_url: "https://reddit.com/r/agents/comments/example",
+        title: "Upgrade churn is unverified",
+        summary: "A community report claims migration churn without stronger support.",
+        citation_text: "One user claims migration churn.",
+        credibility: "low",
+        confidence: 43,
+        content_hash: "claim-unverified-hash",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      }
+    ],
+    risk_signals: [
+      {
+        id: "risk-confirmed",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        risk_key: "checkpoint_staleness",
+        title: "Checkpoint staleness",
+        summary: "Interrupted runs can leave stale checkpoint state.",
+        severity: "high",
+        status: "confirmed",
+        credibility: "high",
+        score_impact: -8,
+        supporting_claim_ids: ["claim-confirmed"],
+        verification_task_ids: ["task-confirmed"],
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "risk-contradicted",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        risk_key: "durability_gap",
+        title: "Durability gap",
+        summary: "A suspected durability gap is contradicted by official docs.",
+        severity: "medium",
+        status: "contradicted",
+        credibility: "high",
+        score_impact: 0,
+        supporting_claim_ids: ["claim-contradicted"],
+        verification_task_ids: ["task-contradicted"],
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "risk-unresolved",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        risk_key: "release_cadence",
+        title: "Release cadence",
+        summary: "Release cadence concern still needs stronger evidence.",
+        severity: "medium",
+        status: "unresolved",
+        credibility: "low",
+        score_impact: 0,
+        supporting_claim_ids: ["claim-unresolved"],
+        verification_task_ids: ["task-unresolved"],
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "risk-unverified",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        risk_key: "upgrade_churn",
+        title: "Upgrade churn",
+        summary: "Upgrade churn is visible but unverified.",
+        severity: "low",
+        status: "unverified",
+        credibility: "low",
+        score_impact: 0,
+        supporting_claim_ids: ["claim-unverified"],
+        verification_task_ids: ["task-unverified"],
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      }
+    ],
+    verification_tasks: [
+      {
+        id: "task-confirmed",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        risk_signal_id: "risk-confirmed",
+        status: "completed",
+        verification_question: "Does stronger evidence confirm checkpoint staleness?",
+        stronger_source_type: "github_issue",
+        stronger_source_url: "https://github.com/langchain-ai/langgraph/issues/321",
+        verdict: "confirmed",
+        rationale: "Maintainer issue confirms the failure mode.",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "task-contradicted",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        risk_signal_id: "risk-contradicted",
+        status: "completed",
+        verification_question: "Do official docs contradict the durability gap?",
+        stronger_source_type: "official_docs",
+        stronger_source_url: "https://langchain-ai.github.io/langgraph/concepts/persistence/",
+        verdict: "contradicted",
+        rationale: "Official docs describe durable persistence support.",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "task-unresolved",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        risk_signal_id: "risk-unresolved",
+        status: "completed",
+        verification_question: "Can release cadence be verified from a stronger source?",
+        stronger_source_type: "official_release",
+        stronger_source_url: null,
+        verdict: "unresolved",
+        rationale: "No official release note confirms or contradicts the community report.",
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      },
+      {
+        id: "task-unverified",
+        session_id: session.id,
+        decision_version_id: version.id,
+        candidate_id: candidateId,
+        risk_signal_id: "risk-unverified",
+        status: "planned",
+        verification_question: "Find stronger evidence for upgrade churn.",
+        stronger_source_type: "official_docs",
+        stronger_source_url: null,
+        verdict: null,
+        rationale: null,
+        payload: {},
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z"
+      }
+    ]
+  };
+}
+
 describe("workbench helpers", () => {
   it("selects versions, recommendations, score cells, evidence, and gap summaries", () => {
     const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
@@ -341,6 +670,32 @@ describe("workbench helpers", () => {
 
     const fallbackWorkspace = { ...workspace, active_version: null };
     expect(latestVersion(fallbackWorkspace)?.id).toBe("version-1");
+  });
+
+  it("selects Phase 3 risks, claims, tasks, tool groups, and summary counts", () => {
+    const workspace = makePhase3Workspace(makeSession("completed", "Recommended: LangGraph."));
+    const risks = activeRiskSignals(workspace);
+    const confirmedRisk = risks.find((risk) => risk.status === "confirmed");
+
+    expect(workspace.tool_calls.map((toolCall) => toolCall.status)).toEqual(["completed", "skipped"]);
+    expect(workspace.claims).toHaveLength(4);
+    expect(riskSummaryCounts(risks)).toEqual({
+      total: 4,
+      confirmed: 1,
+      contradicted: 1,
+      unresolved: 1,
+      unverified: 1
+    });
+    expect(confirmedRisk ? claimsSupportingRisk(workspace, confirmedRisk).map((claim) => claim.id) : []).toEqual([
+      "claim-confirmed"
+    ]);
+    expect(
+      confirmedRisk ? verificationTasksForRisk(workspace, confirmedRisk).map((task) => task.id) : []
+    ).toEqual(["task-confirmed"]);
+    expect(toolCallsGroupedByStatusAndSource(workspace).map((group) => group.key)).toEqual([
+      "completed:github_issue",
+      "skipped:reddit"
+    ]);
   });
 });
 
@@ -485,6 +840,52 @@ describe("App", () => {
       expect(within(screen.getByLabelText("Evidence drawer")).getByText(/strong runtime evidence/i))
         .toBeTruthy();
       expect(within(screen.getByLabelText("ADR")).getByText(/ADR v1/i)).toBeTruthy();
+    });
+  });
+
+  it("shows Phase 3 risks, source filters, details, verification tasks, and skipped tools", async () => {
+    const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    const workspace = makePhase3Workspace(completed);
+
+    listSessionsMock.mockImplementation(async () => [completed]);
+    getWorkspaceMock.mockImplementation(async () => workspace);
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+
+    await waitFor(() => {
+      const riskPanel = screen.getByLabelText("Risk panel");
+      expect(within(riskPanel).getByText("confirmed")).toBeTruthy();
+      expect(within(riskPanel).getByText("contradicted")).toBeTruthy();
+      expect(within(riskPanel).getByText("unresolved")).toBeTruthy();
+      expect(within(riskPanel).getByText("unverified")).toBeTruthy();
+      expect(within(screen.getByLabelText("Tool calls")).getByText("phase3_reddit_search")).toBeTruthy();
+      expect(within(screen.getByLabelText("Tool calls")).getByText("skipped")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter source reddit" }));
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Claims")).getByText("Release cadence is unresolved"))
+        .toBeTruthy();
+      expect(within(screen.getByLabelText("Claims")).queryByText("Checkpoint bug is confirmed"))
+        .toBeNull();
+      expect(within(screen.getByLabelText("Evidence list")).getByText("Community thread: stalled LangGraph releases"))
+        .toBeTruthy();
+      expect(within(screen.getByLabelText("Evidence list")).queryByText("GitHub issue: stale checkpoint bug"))
+        .toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter source all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open risk Checkpoint staleness" }));
+    await waitFor(() => {
+      const detail = screen.getByLabelText("Risk detail");
+      expect(within(detail).getByText("Checkpoint bug is confirmed")).toBeTruthy();
+      expect(within(detail).getByText(/Maintainers confirmed stale checkpoint state/i)).toBeTruthy();
+      expect(within(detail).getByText("GitHub issue: stale checkpoint bug")).toBeTruthy();
+      expect(within(detail).getByText("Does stronger evidence confirm checkpoint staleness?")).toBeTruthy();
     });
   });
 

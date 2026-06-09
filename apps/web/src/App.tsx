@@ -17,11 +17,20 @@ import type {
   Workspace
 } from "./types";
 import {
+  activeClaims,
   activeRecommendation,
+  activeRiskSignals,
+  activeVerificationTasks,
+  claimsSupportingRisk,
+  evidenceForClaim,
   evidenceForScoreCell,
   gapSummary,
   hasDraftChanges,
   latestVersion,
+  riskSummaryCounts,
+  sourceTypesForWorkspace,
+  toolCallsGroupedByStatusAndSource,
+  verificationTasksForRisk,
   scoreCellFor
 } from "./workbench";
 import "./App.css";
@@ -97,6 +106,23 @@ function clampWeight(rawWeight: string, fallback: number): number {
   return Math.min(100, Math.max(0, Math.round(parsed)));
 }
 
+function sourceMatches(item: { source_type: string | null }, sourceType: string | null): boolean {
+  return !sourceType || item.source_type === sourceType;
+}
+
+function versionMatches(item: { decision_version_id: string | null }, versionId: string | null): boolean {
+  return versionId ? item.decision_version_id === versionId : item.decision_version_id === null;
+}
+
+function scoreImpactLabel(scoreImpact: number): string {
+  if (scoreImpact === 0) return "0";
+  return scoreImpact > 0 ? `+${scoreImpact}` : String(scoreImpact);
+}
+
+function sourceTypeLabel(sourceType: string | null): string {
+  return sourceType ?? "internal";
+}
+
 export default function App() {
   const [prompt, setPrompt] = useState(samplePrompt);
   const [sessions, setSessions] = useState<DecisionSession[]>([]);
@@ -108,6 +134,8 @@ export default function App() {
   const [weightDrafts, setWeightDrafts] = useState<Record<string, string>>({});
   const [selectedScoreCellId, setSelectedScoreCellId] = useState<string | null>(null);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+  const [selectedRiskId, setSelectedRiskId] = useState<string | null>(null);
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const selectedVersionIdRef = useRef<string | null>(null);
   const workspaceRequestIdRef = useRef(0);
@@ -159,6 +187,16 @@ export default function App() {
       currentEvidenceId &&
       nextWorkspace.evidence_items.some((evidenceItem) => evidenceItem.id === currentEvidenceId)
         ? currentEvidenceId
+        : null
+    );
+    setSelectedRiskId((currentRiskId) =>
+      currentRiskId && nextWorkspace.risk_signals.some((risk) => risk.id === currentRiskId)
+        ? currentRiskId
+        : null
+    );
+    setSourceTypeFilter((currentSourceType) =>
+      currentSourceType && sourceTypesForWorkspace(nextWorkspace).includes(currentSourceType)
+        ? currentSourceType
         : null
     );
   }
@@ -442,6 +480,45 @@ export default function App() {
   const selectedEvidence = workspace?.evidence_items.find((item) => item.id === selectedEvidenceId) ?? null;
   const selectedScoreCellEvidence =
     workspace && selectedScoreCell ? evidenceForScoreCell(workspace, selectedScoreCell) : [];
+  const activeVersionId = activeVersion?.id ?? null;
+  const activeRisks = useMemo(() => (workspace ? activeRiskSignals(workspace) : []), [workspace]);
+  const riskCounts = useMemo(() => riskSummaryCounts(activeRisks), [activeRisks]);
+  const sourceTypes = useMemo(() => (workspace ? sourceTypesForWorkspace(workspace) : []), [workspace]);
+  const candidateNameById = useMemo(
+    () => new Map(workspace?.candidates.map((candidate) => [candidate.id, candidate.name]) ?? []),
+    [workspace]
+  );
+  const selectedRisk = activeRisks.find((risk) => risk.id === selectedRiskId) ?? null;
+  const selectedRiskClaims =
+    workspace && selectedRisk ? claimsSupportingRisk(workspace, selectedRisk) : [];
+  const selectedRiskTasks =
+    workspace && selectedRisk ? verificationTasksForRisk(workspace, selectedRisk) : [];
+  const visibleClaims = useMemo(
+    () => (workspace ? activeClaims(workspace).filter((claim) => sourceMatches(claim, sourceTypeFilter)) : []),
+    [workspace, sourceTypeFilter]
+  );
+  const visibleEvidenceItems = useMemo(
+    () =>
+      workspace
+        ? workspace.evidence_items.filter(
+            (item) => versionMatches(item, activeVersionId) && sourceMatches(item, sourceTypeFilter)
+          )
+        : [],
+    [workspace, activeVersionId, sourceTypeFilter]
+  );
+  const visibleVerificationTasks = useMemo(
+    () =>
+      workspace
+        ? activeVerificationTasks(workspace).filter(
+            (task) => !sourceTypeFilter || task.stronger_source_type === sourceTypeFilter
+          )
+        : [],
+    [workspace, sourceTypeFilter]
+  );
+  const toolCallGroups = useMemo(
+    () => (workspace ? toolCallsGroupedByStatusAndSource(workspace, sourceTypeFilter) : []),
+    [workspace, sourceTypeFilter]
+  );
 
   return (
     <main className="app-shell">
@@ -701,6 +778,194 @@ export default function App() {
         </section>
 
         <aside className="evidence-column" aria-label="Evidence and trace">
+          <section className="source-filter-section" aria-label="Source filters">
+            <div className="panel-header">
+              <h2>Source filters</h2>
+              <span>{sourceTypeFilter ?? "all"}</span>
+            </div>
+            <div className="source-filter-row">
+              <button
+                aria-label="Filter source all"
+                className={sourceTypeFilter === null ? "source-filter active" : "source-filter"}
+                onClick={() => setSourceTypeFilter(null)}
+                type="button"
+              >
+                All
+              </button>
+              {sourceTypes.map((sourceType) => (
+                <button
+                  aria-label={`Filter source ${sourceType}`}
+                  className={sourceTypeFilter === sourceType ? "source-filter active" : "source-filter"}
+                  key={sourceType}
+                  onClick={() => setSourceTypeFilter(sourceType)}
+                  type="button"
+                >
+                  {sourceType}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="risk-panel" aria-label="Risk panel">
+            <div className="panel-header">
+              <h2>Risk panel</h2>
+              <span>{riskCounts.total} risks</span>
+            </div>
+            <dl className="risk-counts">
+              <div>
+                <dt>Confirmed</dt>
+                <dd>{riskCounts.confirmed}</dd>
+              </div>
+              <div>
+                <dt>Contradicted</dt>
+                <dd>{riskCounts.contradicted}</dd>
+              </div>
+              <div>
+                <dt>Unresolved</dt>
+                <dd>{riskCounts.unresolved}</dd>
+              </div>
+              <div>
+                <dt>Unverified</dt>
+                <dd>{riskCounts.unverified}</dd>
+              </div>
+            </dl>
+            {activeRisks.length > 0 ? (
+              <div className="risk-list">
+                {activeRisks.map((risk) => (
+                  <button
+                    aria-label={`Open risk ${risk.title}`}
+                    className={risk.id === selectedRiskId ? "risk-row selected" : "risk-row"}
+                    key={risk.id}
+                    onClick={() => setSelectedRiskId(risk.id)}
+                    type="button"
+                  >
+                    <span className={`status-pill status-${risk.status}`}>{risk.status}</span>
+                    <strong>{risk.title}</strong>
+                    <p>{risk.summary}</p>
+                    <small>
+                      {candidateNameById.get(risk.candidate_id) ?? "Unknown candidate"} / {risk.severity} / impact{" "}
+                      {scoreImpactLabel(risk.score_impact)}
+                    </small>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p>No Phase 3 risks yet.</p>
+            )}
+          </section>
+
+          <section className="risk-detail" aria-label="Risk detail">
+            <h2>Risk detail</h2>
+            {selectedRisk && workspace ? (
+              <div>
+                <div className="risk-detail-summary">
+                  <span className={`status-pill status-${selectedRisk.status}`}>
+                    {selectedRisk.status}
+                  </span>
+                  <strong>{selectedRisk.title}</strong>
+                  <p>{selectedRisk.summary}</p>
+                </div>
+                <h3>Supporting claims</h3>
+                {selectedRiskClaims.length > 0 ? (
+                  selectedRiskClaims.map((claim) => {
+                    const claimEvidence = evidenceForClaim(workspace, claim);
+                    return (
+                      <article className="claim-row" key={claim.id}>
+                        <strong>{claim.title}</strong>
+                        <span>
+                          {claim.source_type} / {claim.credibility} / {claim.confidence}%
+                        </span>
+                        <p>{claim.summary}</p>
+                        <blockquote>{claim.citation_text}</blockquote>
+                        {claimEvidence ? (
+                          <a href={claimEvidence.source_url} target="_blank" rel="noreferrer">
+                            {claimEvidence.title}
+                          </a>
+                        ) : (
+                          <a href={claim.source_url} target="_blank" rel="noreferrer">
+                            {claim.source_url}
+                          </a>
+                        )}
+                      </article>
+                    );
+                  })
+                ) : (
+                  <p>No supporting claims recorded.</p>
+                )}
+                <h3>Verification tasks</h3>
+                {selectedRiskTasks.length > 0 ? (
+                  selectedRiskTasks.map((task) => (
+                    <article className="verification-row" key={task.id}>
+                      <strong>{task.verdict ?? task.status}</strong>
+                      <p>{task.verification_question}</p>
+                      <span>{task.rationale ?? `Needs ${sourceTypeLabel(task.stronger_source_type)}`}</span>
+                    </article>
+                  ))
+                ) : (
+                  <p>No verification tasks recorded.</p>
+                )}
+              </div>
+            ) : (
+              <p>Select a risk to inspect claims, evidence, and verification tasks.</p>
+            )}
+          </section>
+
+          <section className="claim-section" aria-label="Claims">
+            <h2>Claims</h2>
+            {visibleClaims.length > 0 ? (
+              visibleClaims.map((claim) => (
+                <article className="claim-row" key={claim.id}>
+                  <strong>{claim.title}</strong>
+                  <span>
+                    {claim.source_type} / {claim.credibility} / {claim.confidence}%
+                  </span>
+                  <p>{claim.summary}</p>
+                </article>
+              ))
+            ) : (
+              <p>No claims for this source filter.</p>
+            )}
+          </section>
+
+          <section className="verification-section" aria-label="Verification tasks">
+            <h2>Verification tasks</h2>
+            {visibleVerificationTasks.length > 0 ? (
+              visibleVerificationTasks.map((task) => (
+                <article className="verification-row" key={task.id}>
+                  <strong>{task.verdict ?? task.status}</strong>
+                  <p>{task.verification_question}</p>
+                  <span>{task.rationale ?? `Target: ${sourceTypeLabel(task.stronger_source_type)}`}</span>
+                </article>
+              ))
+            ) : (
+              <p>No verification tasks for this source filter.</p>
+            )}
+          </section>
+
+          <section className="tool-call-section" aria-label="Tool calls">
+            <h2>Tool calls</h2>
+            {toolCallGroups.length > 0 ? (
+              toolCallGroups.map((group) => (
+                <div className="tool-call-group" key={group.key}>
+                  <div className="tool-call-group-header">
+                    <strong>{group.source_type}</strong>
+                    <span>{group.status.toUpperCase()}</span>
+                    <small>{group.items.length}</small>
+                  </div>
+                  {group.items.map((toolCall) => (
+                    <article className="tool-call-row" key={toolCall.id}>
+                      <strong>{toolCall.tool_name}</strong>
+                      <span>{toolCall.status}</span>
+                      <p>{toolCall.response_summary ?? toolCall.error ?? toolCall.request_summary}</p>
+                    </article>
+                  ))}
+                </div>
+              ))
+            ) : (
+              <p>No tool calls for this source filter.</p>
+            )}
+          </section>
+
           <section className="matrix-section">
             <h2>Evidence matrix</h2>
             {workspace?.candidates.length && workspace.criteria.length ? (
@@ -800,22 +1065,29 @@ export default function App() {
             </article>
           ))}
 
-          <h2>Evidence</h2>
-          {workspace?.evidence_items.map((item) => (
-            <article className="evidence-row" key={item.id}>
-              <button
-                className="text-button"
-                onClick={() => {
-                  setSelectedEvidenceId(item.id);
-                  setSelectedScoreCellId(null);
-                }}
-                type="button"
-              >
-                {item.title}
-              </button>
-              <p>{item.summary}</p>
-            </article>
-          ))}
+          <section className="source-evidence-section" aria-label="Evidence list">
+            <h2>Evidence</h2>
+            {visibleEvidenceItems.length > 0 ? (
+              visibleEvidenceItems.map((item) => (
+                <article className="evidence-row" key={item.id}>
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      setSelectedEvidenceId(item.id);
+                      setSelectedScoreCellId(null);
+                    }}
+                    type="button"
+                  >
+                    {item.title}
+                  </button>
+                  <span className="source-tag">{item.source_type}</span>
+                  <p>{item.summary}</p>
+                </article>
+              ))
+            ) : (
+              <p>No evidence for this source filter.</p>
+            )}
+          </section>
 
           <h2>Trace</h2>
           {workspace?.events.map((event) => (

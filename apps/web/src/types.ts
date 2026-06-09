@@ -92,6 +92,81 @@ export interface EvidenceItem {
   created_at: string;
 }
 
+export interface ToolCall {
+  id: string;
+  session_id: string;
+  decision_version_id: string | null;
+  tool_name: string;
+  status: string;
+  idempotency_key: string;
+  source_type: string | null;
+  source_url: string | null;
+  request_summary: string | null;
+  response_summary: string | null;
+  payload: Record<string, unknown>;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Claim {
+  id: string;
+  session_id: string;
+  decision_version_id: string | null;
+  candidate_id: string;
+  criterion_id: string | null;
+  source_evidence_item_id: string | null;
+  source_type: string;
+  source_url: string;
+  title: string;
+  summary: string;
+  citation_text: string;
+  credibility: string;
+  confidence: number;
+  content_hash: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RiskSignal {
+  id: string;
+  session_id: string;
+  decision_version_id: string | null;
+  candidate_id: string;
+  risk_key: string;
+  title: string;
+  summary: string;
+  severity: string;
+  status: string;
+  credibility: string;
+  score_impact: number;
+  supporting_claim_ids: string[];
+  verification_task_ids: string[];
+  payload: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VerificationTask {
+  id: string;
+  session_id: string;
+  decision_version_id: string | null;
+  candidate_id: string;
+  risk_signal_id: string;
+  status: string;
+  verification_question: string;
+  stronger_source_type: string | null;
+  stronger_source_url: string | null;
+  verdict: string | null;
+  rationale: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Recommendation {
   id: string;
   session_id: string;
@@ -177,6 +252,10 @@ export interface Workspace {
   candidates: DecisionCandidate[];
   criteria: DecisionCriterion[];
   evidence_items: EvidenceItem[];
+  tool_calls: ToolCall[];
+  claims: Claim[];
+  risk_signals: RiskSignal[];
+  verification_tasks: VerificationTask[];
   score_cells: ScoreCell[];
   recommendations: Recommendation[];
   events: AgentEvent[];
