@@ -260,3 +260,65 @@ async def test_workspace_returns_versioned_phase3_collections(phase3_client) -> 
     assert [task["verdict"] for task in selected_workspace["verification_tasks"]] == [
         "contradicted"
     ]
+
+
+@pytest.mark.asyncio
+async def test_deleting_risk_signal_deletes_verification_tasks(phase3_client) -> None:
+    _client, maker = phase3_client
+    async with maker() as db:
+        session = await create_decision_session(
+            db,
+            "Compare LangGraph and CrewAI for a stateful Agent runtime.",
+        )
+        version = models.DecisionVersion(
+            session_id=session.id,
+            version_number=1,
+            label="Risk verification",
+            status="completed",
+            change_summary={"kind": "phase3"},
+            gap_analysis={"items": []},
+        )
+        db.add(version)
+        await db.flush()
+        candidate = models.DecisionCandidate(
+            session_id=session.id,
+            decision_version_id=version.id,
+            name="CrewAI",
+            slug="crewai",
+            repo_full_name="crewAIInc/crewAI",
+            include_reason="Candidate under review.",
+        )
+        db.add(candidate)
+        await db.flush()
+        risk = models.RiskSignal(
+            session_id=session.id,
+            decision_version_id=version.id,
+            candidate_id=candidate.id,
+            risk_key="maintenance",
+            title="Maintenance risk",
+            summary="Potential maintenance concern.",
+            severity="medium",
+            status="confirmed",
+            credibility="medium",
+            score_impact=-5,
+        )
+        db.add(risk)
+        await db.flush()
+        task = models.VerificationTask(
+            session_id=session.id,
+            decision_version_id=version.id,
+            candidate_id=candidate.id,
+            risk_signal_id=risk.id,
+            status="completed",
+            verification_question="Check release cadence.",
+            verdict="confirmed",
+        )
+        db.add(task)
+        await db.commit()
+
+        await db.delete(risk)
+        await db.commit()
+
+        remaining_task = await db.get(models.VerificationTask, task.id)
+
+    assert remaining_task is None

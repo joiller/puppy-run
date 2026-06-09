@@ -485,7 +485,8 @@ class RiskSignal(Base):
     version: Mapped[DecisionVersion | None] = relationship(back_populates="risk_signals")
     candidate: Mapped[DecisionCandidate] = relationship()
     verification_tasks: Mapped[list["VerificationTask"]] = relationship(
-        back_populates="risk_signal"
+        back_populates="risk_signal",
+        cascade="all, delete-orphan",
     )
 
 
