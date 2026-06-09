@@ -15,6 +15,7 @@ from puppyrun_agent.phase2 import (
 from puppyrun_api.models import (
     AgentEvent,
     AgentRun,
+    Claim,
     DecisionCandidate,
     DecisionCriterion,
     DecisionMessage,
@@ -23,7 +24,10 @@ from puppyrun_api.models import (
     DecisionVersionStatus,
     EvidenceItem,
     Recommendation,
+    RiskSignal,
     ScoreCell,
+    ToolCall,
+    VerificationTask,
 )
 
 
@@ -42,6 +46,10 @@ class Workspace:
     candidates: list[DecisionCandidate]
     criteria: list[DecisionCriterion]
     evidence_items: list[EvidenceItem]
+    tool_calls: list[ToolCall]
+    claims: list[Claim]
+    risk_signals: list[RiskSignal]
+    verification_tasks: list[VerificationTask]
     score_cells: list[ScoreCell]
     recommendations: list[Recommendation]
     events: list[AgentEvent]
@@ -68,6 +76,14 @@ async def get_workspace(
     evidence_items = await _list_versioned_rows(
         db, EvidenceItem, session_id, versions, active_version
     )
+    tool_calls = await _list_versioned_rows(db, ToolCall, session_id, versions, active_version)
+    claims = await _list_versioned_rows(db, Claim, session_id, versions, active_version)
+    risk_signals = await _list_versioned_rows(
+        db, RiskSignal, session_id, versions, active_version
+    )
+    verification_tasks = await _list_versioned_rows(
+        db, VerificationTask, session_id, versions, active_version
+    )
     recommendations = await _list_versioned_rows(
         db, Recommendation, session_id, versions, active_version
     )
@@ -84,6 +100,10 @@ async def get_workspace(
         candidates=candidates,
         criteria=criteria,
         evidence_items=evidence_items,
+        tool_calls=tool_calls,
+        claims=claims,
+        risk_signals=risk_signals,
+        verification_tasks=verification_tasks,
         score_cells=score_cells,
         recommendations=recommendations,
         events=events,

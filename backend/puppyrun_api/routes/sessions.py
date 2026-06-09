@@ -12,6 +12,7 @@ from puppyrun_api.repositories import workspace as workspace_repo
 from puppyrun_api.schemas import (
     AgentEventResponse,
     AgentRunResponse,
+    ClaimResponse,
     CreateDecisionMessageRequest,
     CreateDecisionSessionRequest,
     DecisionCandidateResponse,
@@ -24,8 +25,11 @@ from puppyrun_api.schemas import (
     Phase2DraftRequest,
     Phase2DraftResponse,
     RecommendationResponse,
+    RiskSignalResponse,
     ScoreCellResponse,
     StartAgentRunResponse,
+    ToolCallResponse,
+    VerificationTaskResponse,
     WorkspaceResponse,
 )
 from puppyrun_worker.main import redis_settings_from_url
@@ -199,6 +203,18 @@ def _workspace_response(workspace: workspace_repo.Workspace) -> WorkspaceRespons
         evidence_items=[
             EvidenceItemResponse.model_validate(evidence_item)
             for evidence_item in workspace.evidence_items
+        ],
+        tool_calls=[
+            ToolCallResponse.model_validate(tool_call) for tool_call in workspace.tool_calls
+        ],
+        claims=[ClaimResponse.model_validate(claim) for claim in workspace.claims],
+        risk_signals=[
+            RiskSignalResponse.model_validate(risk_signal)
+            for risk_signal in workspace.risk_signals
+        ],
+        verification_tasks=[
+            VerificationTaskResponse.model_validate(verification_task)
+            for verification_task in workspace.verification_tasks
         ],
         score_cells=[
             ScoreCellResponse.model_validate(score_cell) for score_cell in workspace.score_cells

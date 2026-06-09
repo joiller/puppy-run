@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -190,6 +191,18 @@ class DecisionSession(Base):
     score_cells: Mapped[list["ScoreCell"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
+    tool_calls: Mapped[list["ToolCall"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+    claims: Mapped[list["Claim"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+    risk_signals: Mapped[list["RiskSignal"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+    verification_tasks: Mapped[list["VerificationTask"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
     agent_runs: Mapped[list["AgentRun"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
@@ -249,6 +262,18 @@ class DecisionVersion(Base):
     evidence_items: Mapped[list["EvidenceItem"]] = relationship(back_populates="version")
     recommendations: Mapped[list["Recommendation"]] = relationship(back_populates="version")
     score_cells: Mapped[list["ScoreCell"]] = relationship(
+        back_populates="version", cascade="all, delete-orphan"
+    )
+    tool_calls: Mapped[list["ToolCall"]] = relationship(
+        back_populates="version", cascade="all, delete-orphan"
+    )
+    claims: Mapped[list["Claim"]] = relationship(
+        back_populates="version", cascade="all, delete-orphan"
+    )
+    risk_signals: Mapped[list["RiskSignal"]] = relationship(
+        back_populates="version", cascade="all, delete-orphan"
+    )
+    verification_tasks: Mapped[list["VerificationTask"]] = relationship(
         back_populates="version", cascade="all, delete-orphan"
     )
 
@@ -329,6 +354,181 @@ class EvidenceItem(Base):
 
     session: Mapped[DecisionSession] = relationship(back_populates="evidence_items")
     version: Mapped[DecisionVersion | None] = relationship(back_populates="evidence_items")
+
+
+class ToolCall(Base):
+    __tablename__ = "tool_calls"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_tool_calls_idempotency_key"),
+        Index("ix_tool_calls_session_id", "session_id"),
+        Index("ix_tool_calls_decision_version_id", "decision_version_id"),
+        Index("ix_tool_calls_status_source", "status", "source_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="CASCADE")
+    )
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_type: Mapped[str | None] = mapped_column(String(80))
+    source_url: Mapped[str | None] = mapped_column(Text)
+    request_summary: Mapped[str | None] = mapped_column(Text)
+    response_summary: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(
+        RecursiveMutableDict.as_mutable(JSON), default=dict, nullable=False
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    session: Mapped[DecisionSession] = relationship(back_populates="tool_calls")
+    version: Mapped[DecisionVersion | None] = relationship(back_populates="tool_calls")
+
+
+class Claim(Base):
+    __tablename__ = "claims"
+    __table_args__ = (
+        Index("ix_claims_session_id", "session_id"),
+        Index("ix_claims_decision_version_id", "decision_version_id"),
+        Index("ix_claims_candidate_id", "candidate_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="CASCADE")
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    criterion_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_criteria.id", ondelete="SET NULL")
+    )
+    source_evidence_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("evidence_items.id", ondelete="SET NULL")
+    )
+    source_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    citation_text: Mapped[str] = mapped_column(Text, nullable=False)
+    credibility: Mapped[str] = mapped_column(String(40), nullable=False)
+    confidence: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict] = mapped_column(
+        RecursiveMutableDict.as_mutable(JSON), default=dict, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    session: Mapped[DecisionSession] = relationship(back_populates="claims")
+    version: Mapped[DecisionVersion | None] = relationship(back_populates="claims")
+    candidate: Mapped[DecisionCandidate] = relationship()
+    criterion: Mapped[DecisionCriterion | None] = relationship()
+    source_evidence_item: Mapped[EvidenceItem | None] = relationship()
+
+
+class RiskSignal(Base):
+    __tablename__ = "risk_signals"
+    __table_args__ = (
+        Index("ix_risk_signals_session_id", "session_id"),
+        Index("ix_risk_signals_decision_version_id", "decision_version_id"),
+        Index("ix_risk_signals_candidate_id", "candidate_id"),
+        Index("ix_risk_signals_status_severity", "status", "severity"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="CASCADE")
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    risk_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    credibility: Mapped[str] = mapped_column(String(40), nullable=False)
+    score_impact: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    supporting_claim_ids: Mapped[list] = mapped_column(
+        RecursiveMutableList.as_mutable(JSON), default=list, nullable=False
+    )
+    verification_task_ids: Mapped[list] = mapped_column(
+        RecursiveMutableList.as_mutable(JSON), default=list, nullable=False
+    )
+    payload: Mapped[dict] = mapped_column(
+        RecursiveMutableDict.as_mutable(JSON), default=dict, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    session: Mapped[DecisionSession] = relationship(back_populates="risk_signals")
+    version: Mapped[DecisionVersion | None] = relationship(back_populates="risk_signals")
+    candidate: Mapped[DecisionCandidate] = relationship()
+    verification_tasks: Mapped[list["VerificationTask"]] = relationship(
+        back_populates="risk_signal"
+    )
+
+
+class VerificationTask(Base):
+    __tablename__ = "verification_tasks"
+    __table_args__ = (
+        Index("ix_verification_tasks_session_id", "session_id"),
+        Index("ix_verification_tasks_decision_version_id", "decision_version_id"),
+        Index("ix_verification_tasks_candidate_id", "candidate_id"),
+        Index("ix_verification_tasks_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_versions.id", ondelete="CASCADE")
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("decision_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    risk_signal_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("risk_signals.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    verification_question: Mapped[str] = mapped_column(Text, nullable=False)
+    stronger_source_type: Mapped[str | None] = mapped_column(String(80))
+    stronger_source_url: Mapped[str | None] = mapped_column(Text)
+    verdict: Mapped[str | None] = mapped_column(String(40))
+    rationale: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(
+        RecursiveMutableDict.as_mutable(JSON), default=dict, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    session: Mapped[DecisionSession] = relationship(back_populates="verification_tasks")
+    version: Mapped[DecisionVersion | None] = relationship(back_populates="verification_tasks")
+    candidate: Mapped[DecisionCandidate] = relationship()
+    risk_signal: Mapped[RiskSignal] = relationship(back_populates="verification_tasks")
 
 
 class Recommendation(Base):

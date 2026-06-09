@@ -168,6 +168,89 @@ class EvidenceItemResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ToolCallResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    decision_version_id: UUID | None
+    tool_name: str
+    status: str
+    idempotency_key: str
+    source_type: str | None
+    source_url: str | None
+    request_summary: str | None
+    response_summary: str | None
+    payload: dict
+    error: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ClaimResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    decision_version_id: UUID | None
+    candidate_id: UUID
+    criterion_id: UUID | None
+    source_evidence_item_id: UUID | None
+    source_type: str
+    source_url: str
+    title: str
+    summary: str
+    citation_text: str
+    credibility: str
+    confidence: int
+    content_hash: str
+    payload: dict
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RiskSignalResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    decision_version_id: UUID | None
+    candidate_id: UUID
+    risk_key: str
+    title: str
+    summary: str
+    severity: str
+    status: str
+    credibility: str
+    score_impact: int
+    supporting_claim_ids: list[UUID]
+    verification_task_ids: list[UUID]
+    payload: dict
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class VerificationTaskResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    decision_version_id: UUID | None
+    candidate_id: UUID
+    risk_signal_id: UUID
+    status: str
+    verification_question: str
+    stronger_source_type: str | None
+    stronger_source_url: str | None
+    verdict: str | None
+    rationale: str | None
+    payload: dict
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class RecommendationResponse(BaseModel):
     id: UUID
     session_id: UUID
@@ -253,6 +336,10 @@ class WorkspaceResponse(BaseModel):
     candidates: list[DecisionCandidateResponse]
     criteria: list[DecisionCriterionResponse]
     evidence_items: list[EvidenceItemResponse]
+    tool_calls: list[ToolCallResponse]
+    claims: list[ClaimResponse]
+    risk_signals: list[RiskSignalResponse]
+    verification_tasks: list[VerificationTaskResponse]
     score_cells: list[ScoreCellResponse]
     recommendations: list[RecommendationResponse]
     events: list[AgentEventResponse]
