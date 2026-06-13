@@ -9,6 +9,7 @@ from puppyrun_agent.catalog import select_candidates
 from puppyrun_agent.clarification import build_initial_context, update_context_with_answer
 from puppyrun_agent.criteria import CriterionProfile, generate_criteria
 from puppyrun_agent.github_client import GitHubClient, RepositorySummary
+from puppyrun_agent.llm_providers import DeterministicLLMProvider, OpenAILLMProvider
 from puppyrun_agent.phase2 import (
     apply_phase2_constraints,
     apply_phase2_criteria,
@@ -320,7 +321,10 @@ async def _run_phase3_steps(
         previous_evidence,
     )
     try:
-        phase3_result = build_risk_verification_pipeline(source_results)
+        phase3_result = build_risk_verification_pipeline(
+            source_results,
+            provider=_phase3_llm_provider_from_settings(),
+        )
     except Exception as exc:
         error = sanitize_error(str(exc))
         if fail_on_provider_error:
@@ -410,6 +414,20 @@ async def _run_phase3_steps(
     )
     await db.flush()
     return risk_score_data
+
+
+def _phase3_llm_provider_from_settings() -> object:
+    settings = get_settings()
+    provider = settings.llm_provider.strip().lower()
+    if provider in {"", "deterministic"}:
+        return DeterministicLLMProvider()
+    if provider == "openai":
+        return OpenAILLMProvider(
+            api_key=settings.openai_api_key,
+            model=settings.openai_model,
+            base_url=settings.openai_base_url,
+        )
+    raise RuntimeError(f"Unsupported Phase 3 LLM provider: {provider}")
 
 
 async def _phase3_candidate_source_handler(

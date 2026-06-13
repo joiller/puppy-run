@@ -381,7 +381,7 @@ def _strict_json_schema(schema_model: type[BaseModel]) -> dict:
     return _stricten_json_schema(schema_model.model_json_schema())
 
 
-def _stricten_json_schema(value: object) -> object:
+def _stricten_json_schema(value: object, *, in_properties: bool = False) -> object:
     if isinstance(value, list):
         return [_stricten_json_schema(item) for item in value]
     if not isinstance(value, dict):
@@ -389,9 +389,9 @@ def _stricten_json_schema(value: object) -> object:
 
     strict: dict = {}
     for key, item in value.items():
-        if key in UNSUPPORTED_STRICT_SCHEMA_KEYS:
+        if not in_properties and key in UNSUPPORTED_STRICT_SCHEMA_KEYS:
             continue
-        strict[key] = _stricten_json_schema(item)
+        strict[key] = _stricten_json_schema(item, in_properties=key == "properties")
 
     properties = strict.get("properties")
     if isinstance(properties, dict):

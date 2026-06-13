@@ -3,6 +3,7 @@ import json
 import pytest
 
 from puppyrun_agent.llm_providers import (
+    UNSUPPORTED_STRICT_SCHEMA_KEYS,
     DeterministicLLMProvider,
     ExtractedClaim,
     ExtractedClaims,
@@ -11,6 +12,7 @@ from puppyrun_agent.llm_providers import (
     ProviderUnavailableError,
     RiskClusters,
     VerificationVerdict,
+    _strict_json_schema,
 )
 
 
@@ -169,6 +171,25 @@ def test_openai_provider_builds_responses_structured_output_request() -> None:
     assert call["input"][-1]["role"] == "user"
 
 
+def test_openai_strict_schema_preserves_business_title_fields() -> None:
+    claims_schema = _strict_json_schema(ExtractedClaims)
+    risks_schema = _strict_json_schema(RiskClusters)
+
+    claim_schema = claims_schema["$defs"]["ExtractedClaim"]
+    risk_schema = risks_schema["$defs"]["RiskCluster"]
+
+    assert "title" in claim_schema["properties"]
+    assert "title" in claim_schema["required"]
+    assert "title" in risk_schema["properties"]
+    assert "title" in risk_schema["required"]
+    assert claim_schema["additionalProperties"] is False
+    assert risk_schema["additionalProperties"] is False
+    assert set(claim_schema["required"]) == set(claim_schema["properties"])
+    assert set(risk_schema["required"]) == set(risk_schema["properties"])
+    assert not _schema_metadata_keys(claims_schema, UNSUPPORTED_STRICT_SCHEMA_KEYS)
+    assert not _schema_metadata_keys(risks_schema, UNSUPPORTED_STRICT_SCHEMA_KEYS)
+
+
 def test_openai_provider_demotes_confirmed_community_only_risk() -> None:
     client = FakeClient(
         {
@@ -250,3 +271,31 @@ def test_openai_provider_does_not_run_without_api_key() -> None:
 
     with pytest.raises(ProviderUnavailableError):
         provider.extract_claims(_evidence())
+
+
+def _schema_metadata_keys(
+    value: object,
+    unsupported_keys: set[str],
+    *,
+    in_properties: bool = False,
+) -> list[str]:
+    if isinstance(value, list):
+        found: list[str] = []
+        for item in value:
+            found.extend(_schema_metadata_keys(item, unsupported_keys))
+        return found
+    if not isinstance(value, dict):
+        return []
+
+    found = []
+    for key, item in value.items():
+        if not in_properties and key in unsupported_keys:
+            found.append(key)
+        found.extend(
+            _schema_metadata_keys(
+                item,
+                unsupported_keys,
+                in_properties=key == "properties",
+            )
+        )
+    return found

@@ -3,7 +3,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from puppyrun_agent.llm_providers import DeterministicLLMProvider, OpenAILLMProvider
 from puppyrun_agent.workflow import run_phase1_workflow, run_phase2_workflow
+from puppyrun_api.config import get_settings
 from puppyrun_api.db import Base
 from puppyrun_api.models import (
     AgentEvent,
@@ -123,6 +125,63 @@ async def test_phase1_workflow_persists_phase3_risk_rows_and_events() -> None:
         assert "risk_adjusted_scores" in event_types
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase1_workflow_uses_deterministic_llm_provider_by_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("PUPPYRUN_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("PUPPYRUN_OPENAI_API_KEY", raising=False)
+    get_settings.cache_clear()
+    captured_providers = []
+
+    def capture_pipeline(_source_results, *, provider=None):
+        captured_providers.append(provider)
+        return _empty_phase3_result()
+
+    monkeypatch.setattr(
+        "puppyrun_agent.workflow.build_risk_verification_pipeline",
+        capture_pipeline,
+    )
+    try:
+        await _run_phase1_for_provider_capture()
+    finally:
+        get_settings.cache_clear()
+
+    assert len(captured_providers) == 1
+    assert isinstance(captured_providers[0], DeterministicLLMProvider)
+
+
+@pytest.mark.asyncio
+async def test_phase1_workflow_passes_openai_provider_when_configured(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PUPPYRUN_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("PUPPYRUN_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("PUPPYRUN_OPENAI_MODEL", "gpt-5.5")
+    monkeypatch.delenv("PUPPYRUN_OPENAI_BASE_URL", raising=False)
+    get_settings.cache_clear()
+    captured_providers = []
+
+    def capture_pipeline(_source_results, *, provider=None):
+        captured_providers.append(provider)
+        return _empty_phase3_result()
+
+    monkeypatch.setattr(
+        "puppyrun_agent.workflow.build_risk_verification_pipeline",
+        capture_pipeline,
+    )
+    try:
+        await _run_phase1_for_provider_capture()
+    finally:
+        get_settings.cache_clear()
+
+    assert len(captured_providers) == 1
+    provider = captured_providers[0]
+    assert isinstance(provider, OpenAILLMProvider)
+    assert provider.api_key == "test-key"
+    assert provider.model == "gpt-5.5"
 
 
 @pytest.mark.asyncio
@@ -273,7 +332,8 @@ async def test_phase2_workflow_creates_versioned_phase3_rows_and_reuse_provenanc
 async def test_phase2_phase3_provider_failure_marks_only_new_version_failed(
     monkeypatch,
 ) -> None:
-    def failing_pipeline(_source_results):
+    def failing_pipeline(_source_results, *, provider=None):
+        assert provider is not None
         raise RuntimeError("provider failed with api_key=secret-api-key")
 
     monkeypatch.setattr(
@@ -354,6 +414,44 @@ async def test_phase2_phase3_provider_failure_marks_only_new_version_failed(
         assert run.status == AgentRunStatus.failed
 
     await engine.dispose()
+
+
+async def _run_phase1_for_provider_capture() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as db:
+        session = await create_decision_session(
+            db,
+            "Compare LangGraph, OpenAI Agents SDK, and CrewAI for a web Agent runtime.",
+        )
+        await append_user_message(
+            db,
+            session.id,
+            "We need Python, checkpointing, human approval, and observability.",
+        )
+        run = await create_agent_run(db, session.id)
+        run_id = run.id
+
+    async with maker() as db:
+        await run_phase1_workflow(
+            db,
+            run_id,
+            github_transport=httpx.MockTransport(github_handler),
+        )
+
+    await engine.dispose()
+
+
+def _empty_phase3_result() -> dict:
+    return {
+        "claims": [],
+        "risk_signals": [],
+        "verification_tasks": [],
+        "risk_adjustments": {},
+    }
 
 
 @pytest.mark.asyncio
