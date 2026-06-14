@@ -3,7 +3,11 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from puppyrun_agent.llm_providers import DeterministicLLMProvider, OpenAILLMProvider
+from puppyrun_agent.llm_providers import (
+    DeepSeekLLMProvider,
+    DeterministicLLMProvider,
+    OpenAILLMProvider,
+)
 from puppyrun_agent.workflow import run_phase1_workflow, run_phase2_workflow
 from puppyrun_api.config import get_settings
 from puppyrun_api.db import Base
@@ -182,6 +186,38 @@ async def test_phase1_workflow_passes_openai_provider_when_configured(
     assert isinstance(provider, OpenAILLMProvider)
     assert provider.api_key == "test-key"
     assert provider.model == "gpt-5.5"
+
+
+@pytest.mark.asyncio
+async def test_phase1_workflow_passes_deepseek_provider_when_configured(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PUPPYRUN_LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("PUPPYRUN_DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("PUPPYRUN_DEEPSEEK_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("PUPPYRUN_DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    get_settings.cache_clear()
+    captured_providers = []
+
+    def capture_pipeline(_source_results, *, provider=None):
+        captured_providers.append(provider)
+        return _empty_phase3_result()
+
+    monkeypatch.setattr(
+        "puppyrun_agent.workflow.build_risk_verification_pipeline",
+        capture_pipeline,
+    )
+    try:
+        await _run_phase1_for_provider_capture()
+    finally:
+        get_settings.cache_clear()
+
+    assert len(captured_providers) == 1
+    provider = captured_providers[0]
+    assert isinstance(provider, DeepSeekLLMProvider)
+    assert provider.api_key == "test-key"
+    assert provider.model == "deepseek-v4-flash"
+    assert provider.base_url == "https://api.deepseek.com"
 
 
 @pytest.mark.asyncio

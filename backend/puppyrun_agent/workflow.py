@@ -9,7 +9,11 @@ from puppyrun_agent.catalog import select_candidates
 from puppyrun_agent.clarification import build_initial_context, update_context_with_answer
 from puppyrun_agent.criteria import CriterionProfile, generate_criteria
 from puppyrun_agent.github_client import GitHubClient, RepositorySummary
-from puppyrun_agent.llm_providers import DeterministicLLMProvider, OpenAILLMProvider
+from puppyrun_agent.llm_providers import (
+    DeepSeekLLMProvider,
+    DeterministicLLMProvider,
+    OpenAILLMProvider,
+)
 from puppyrun_agent.phase2 import (
     apply_phase2_constraints,
     apply_phase2_criteria,
@@ -426,6 +430,12 @@ def _phase3_llm_provider_from_settings() -> object:
             api_key=settings.openai_api_key,
             model=settings.openai_model,
             base_url=settings.openai_base_url,
+        )
+    if provider == "deepseek":
+        return DeepSeekLLMProvider(
+            api_key=settings.deepseek_api_key,
+            model=settings.deepseek_model,
+            base_url=settings.deepseek_base_url,
         )
     raise RuntimeError(f"Unsupported Phase 3 LLM provider: {provider}")
 

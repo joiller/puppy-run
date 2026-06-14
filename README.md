@@ -12,7 +12,7 @@ Phase 3 adds evidence and risk verification: versioned tool-call traces, source 
 
 To increase GitHub API rate limits in a public deployment, set `PUPPYRUN_GITHUB_TOKEN` in the deployment environment. The token is optional for local smoke tests and must not be committed.
 
-Phase 3 uses `PUPPYRUN_LLM_PROVIDER=deterministic` by default, so no-key local and Docker smoke tests do not make live LLM calls. Optional live extraction uses `PUPPYRUN_LLM_PROVIDER=openai`, `PUPPYRUN_OPENAI_API_KEY`, and `PUPPYRUN_TAVILY_API_KEY`; keep credential values in private local environment files or shell exports only. Reddit collection is gated by `PUPPYRUN_ENABLE_REDDIT=false` and remains disabled by default.
+Phase 3 uses `PUPPYRUN_LLM_PROVIDER=deterministic` by default, so no-key local and Docker smoke tests do not make live LLM calls. Optional live extraction can use `PUPPYRUN_LLM_PROVIDER=openai` with `PUPPYRUN_OPENAI_API_KEY`, or `PUPPYRUN_LLM_PROVIDER=deepseek` with `PUPPYRUN_DEEPSEEK_API_KEY`; keep credential values in private local environment files or shell exports only. Reddit collection is gated by `PUPPYRUN_ENABLE_REDDIT=false` and remains disabled by default.
 
 Phase 0 remains closed at the repository scope: the local deployable skeleton and the temporary VPS public demo loop have both been verified.
 
@@ -175,7 +175,18 @@ Expected health response:
 {"status":"ok","service":"puppyrun-api"}
 ```
 
-For optional live OpenAI and Tavily smoke, keep credentials outside committed files and run the backend/worker with these private environment variables set:
+For optional live DeepSeek smoke, keep credentials outside committed files and run the backend/worker with these private environment variables set:
+
+```bash
+PUPPYRUN_LLM_PROVIDER=deepseek
+PUPPYRUN_DEEPSEEK_MODEL=deepseek-v4-flash
+PUPPYRUN_DEEPSEEK_API_KEY=<private value>
+PUPPYRUN_DEEPSEEK_BASE_URL=https://api.deepseek.com
+PUPPYRUN_TAVILY_API_KEY=<private value>
+PUPPYRUN_ENABLE_REDDIT=false
+```
+
+For optional live OpenAI and Tavily smoke, use:
 
 ```bash
 PUPPYRUN_LLM_PROVIDER=openai

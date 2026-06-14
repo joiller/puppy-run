@@ -4,6 +4,7 @@ import pytest
 
 from puppyrun_agent.llm_providers import (
     UNSUPPORTED_STRICT_SCHEMA_KEYS,
+    DeepSeekLLMProvider,
     DeterministicLLMProvider,
     ExtractedClaim,
     ExtractedClaims,
@@ -119,6 +120,65 @@ class FakeClient:
         error: Exception | None = None,
     ) -> None:
         self.responses = FakeResponses(
+            output_payload,
+            response_payload=response_payload,
+            error=error,
+        )
+
+
+class FakeChatCompletions:
+    def __init__(
+        self,
+        output_payload: dict | None = None,
+        *,
+        response_payload: dict | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.output_payload = output_payload
+        self.response_payload = response_payload
+        self.error = error
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        if self.response_payload is not None:
+            return self.response_payload
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps(self.output_payload)},
+                }
+            ]
+        }
+
+
+class FakeChat:
+    def __init__(
+        self,
+        output_payload: dict | None = None,
+        *,
+        response_payload: dict | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.completions = FakeChatCompletions(
+            output_payload,
+            response_payload=response_payload,
+            error=error,
+        )
+
+
+class FakeDeepSeekClient:
+    def __init__(
+        self,
+        output_payload: dict | None = None,
+        *,
+        response_payload: dict | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.chat = FakeChat(
             output_payload,
             response_payload=response_payload,
             error=error,
@@ -268,6 +328,71 @@ def test_openai_provider_sanitizes_api_errors() -> None:
 
 def test_openai_provider_does_not_run_without_api_key() -> None:
     provider = OpenAILLMProvider(api_key=None, model="gpt-5.5", client=FakeClient({}))
+
+    with pytest.raises(ProviderUnavailableError):
+        provider.extract_claims(_evidence())
+
+
+def test_deepseek_provider_builds_chat_json_output_request() -> None:
+    client = FakeDeepSeekClient(
+        {
+            "claims": [
+                {
+                    "candidate_slug": "langgraph",
+                    "source_type": "official_docs",
+                    "source_url": "https://docs.example/langgraph",
+                    "title": "Docs claim",
+                    "summary": "Official docs support checkpointing.",
+                    "citation_text": "Checkpointing docs.",
+                    "credibility": "high",
+                    "confidence": 90,
+                }
+            ]
+        }
+    )
+    provider = DeepSeekLLMProvider(
+        api_key="test-key",
+        model="deepseek-v4-flash",
+        client=client,
+    )
+
+    claims = provider.extract_claims(_evidence())
+    call = client.chat.completions.calls[0]
+
+    assert claims.claims[0].candidate_slug == "langgraph"
+    assert call["model"] == "deepseek-v4-flash"
+    assert call["stream"] is False
+    assert call["response_format"] == {"type": "json_object"}
+    assert "JSON" in call["messages"][0]["content"]
+    assert "ExtractedClaims" in call["messages"][0]["content"]
+    assert "Do not include secrets" in call["messages"][0]["content"]
+    assert call["messages"][-1]["role"] == "user"
+    assert "evidence_items" in call["messages"][-1]["content"]
+
+
+def test_deepseek_provider_sanitizes_chat_errors() -> None:
+    client = FakeDeepSeekClient(error=RuntimeError("upstream api_key=secret-api-key failed"))
+    provider = DeepSeekLLMProvider(
+        api_key="test-key",
+        model="deepseek-v4-flash",
+        client=client,
+    )
+
+    with pytest.raises(ProviderResponseError) as exc_info:
+        provider.extract_claims(_evidence())
+
+    message = str(exc_info.value)
+    assert "DeepSeek chat completion request failed" in message
+    assert "secret-api-key" not in message
+    assert "[redacted]" in message
+
+
+def test_deepseek_provider_does_not_run_without_api_key() -> None:
+    provider = DeepSeekLLMProvider(
+        api_key=None,
+        model="deepseek-v4-flash",
+        client=FakeDeepSeekClient({}),
+    )
 
     with pytest.raises(ProviderUnavailableError):
         provider.extract_claims(_evidence())

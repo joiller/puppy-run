@@ -11,6 +11,7 @@ StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 COMMUNITY_SOURCE_TYPES = {"reddit", "hacker_news", "stack_exchange"}
 STRONG_SOURCE_TYPES = {"official_docs", "github_release", "github_issue", "arxiv", "technical_blog"}
+DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
 UNSUPPORTED_STRICT_SCHEMA_KEYS = {
     "default",
     "title",
@@ -326,6 +327,120 @@ class OpenAILLMProvider:
         return self.client
 
 
+class DeepSeekLLMProvider:
+    def __init__(
+        self,
+        *,
+        api_key: str | None,
+        model: str,
+        base_url: str | None = DEEPSEEK_DEFAULT_BASE_URL,
+        client=None,
+    ) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url or DEEPSEEK_DEFAULT_BASE_URL
+        self.client = client
+
+    def extract_claims(self, evidence_items: list[dict]) -> ExtractedClaims:
+        payload = self._create_json_response(
+            schema_model=ExtractedClaims,
+            task="Extract concise evidence-backed claims from the supplied source snippets.",
+            data={"evidence_items": evidence_items},
+        )
+        return ExtractedClaims.model_validate(payload)
+
+    def cluster_risks(self, claims: list[ExtractedClaim]) -> RiskClusters:
+        risks = self._create_json_response(
+            schema_model=RiskClusters,
+            task="Cluster extracted claims into candidate risk signals.",
+            data={"claims": [claim.model_dump() for claim in claims]},
+        )
+        return _enforce_low_trust_risk_policy(risks, claims)
+
+    def plan_verification(self, risks: list[RiskCluster]) -> VerificationPlan:
+        payload = self._create_json_response(
+            schema_model=VerificationPlan,
+            task="Create verification tasks that target stronger source types.",
+            data={"risks": [risk.model_dump() for risk in risks]},
+        )
+        return VerificationPlan.model_validate(payload)
+
+    def verify_risk(
+        self,
+        risk: RiskCluster,
+        *,
+        stronger_evidence: list[dict],
+    ) -> VerificationVerdict:
+        verdict = self._create_json_response(
+            schema_model=VerificationVerdict,
+            task="Return a conservative risk verification verdict.",
+            data={"risk": risk.model_dump(), "stronger_evidence": stronger_evidence},
+        )
+        return _enforce_verdict_source_policy(verdict)
+
+    def synthesize_risks(self, risks: list[RiskCluster]) -> RiskSynthesis:
+        payload = self._create_json_response(
+            schema_model=RiskSynthesis,
+            task="Summarize verified risk signals for a decision rationale.",
+            data={"risks": [risk.model_dump() for risk in risks]},
+        )
+        return RiskSynthesis.model_validate(payload)
+
+    def _create_json_response(
+        self,
+        *,
+        schema_model: type[StructuredModel],
+        task: str,
+        data: dict,
+    ) -> StructuredModel:
+        if not self.api_key:
+            raise ProviderUnavailableError(
+                "DeepSeek provider requires PUPPYRUN_DEEPSEEK_API_KEY"
+            )
+        client = self._client()
+        try:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": _deepseek_system_prompt(schema_model),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {"task": task, "data": data},
+                            sort_keys=True,
+                        ),
+                    },
+                ],
+                response_format={"type": "json_object"},
+                stream=False,
+            )
+        except Exception as exc:
+            raise ProviderResponseError(
+                f"DeepSeek chat completion request failed: {sanitize_error(str(exc))}"
+            ) from exc
+
+        payload = _extract_chat_completion_json(response, provider_name="DeepSeek")
+        try:
+            return schema_model.model_validate(payload)
+        except ValidationError as exc:
+            raise ProviderResponseError(
+                f"DeepSeek JSON output failed validation: {sanitize_error(str(exc))}"
+            ) from exc
+
+    def _client(self):
+        if self.client is not None:
+            return self.client
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise ProviderUnavailableError("OpenAI Python SDK is not installed") from exc
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self.client
+
+
 def _extract_response_json(response) -> dict:
     status = _response_value(response, "status")
     if status == "incomplete":
@@ -371,6 +486,35 @@ def _extract_response_json(response) -> dict:
     raise ProviderResponseError("OpenAI response did not contain output_text JSON.")
 
 
+def _extract_chat_completion_json(response, *, provider_name: str) -> dict:
+    choices = _response_value(response, "choices")
+    if not isinstance(choices, list) or not choices:
+        raise ProviderResponseError(f"{provider_name} response did not contain choices.")
+
+    choice = choices[0]
+    finish_reason = _response_value(choice, "finish_reason")
+    if finish_reason == "length":
+        raise ProviderResponseError(f"{provider_name} response JSON was truncated.")
+    if finish_reason in {"content_filter", "insufficient_system_resource"}:
+        raise ProviderResponseError(
+            f"{provider_name} response stopped with finish_reason={finish_reason}."
+        )
+
+    message = _response_value(choice, "message")
+    text = _response_value(message, "content")
+    if not isinstance(text, str) or not text.strip():
+        raise ProviderResponseError(f"{provider_name} response did not contain JSON content.")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ProviderResponseError(
+            f"{provider_name} response JSON was invalid: {sanitize_error(str(exc))}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ProviderResponseError(f"{provider_name} response JSON was not an object.")
+    return payload
+
+
 def _response_value(value: object, key: str) -> object:
     if isinstance(value, dict):
         return value.get(key)
@@ -398,6 +542,17 @@ def _stricten_json_schema(value: object, *, in_properties: bool = False) -> obje
         strict["additionalProperties"] = False
         strict["required"] = list(properties.keys())
     return strict
+
+
+def _deepseek_system_prompt(schema_model: type[BaseModel]) -> str:
+    schema = json.dumps(_strict_json_schema(schema_model), sort_keys=True)
+    return (
+        "You extract evidence-grounded Agent framework risk data. "
+        "Do not include secrets, credentials, or raw full community threads. "
+        "Return only valid JSON, with no markdown or commentary. "
+        f"The JSON must validate as {schema_model.__name__}. "
+        f"JSON schema: {schema}"
+    )
 
 
 def _enforce_low_trust_risk_policy(

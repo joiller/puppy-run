@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.5"
     openai_api_key: str | None = None
     openai_base_url: str | None = None
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_api_key: str | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
     tavily_api_key: str | None = None
     enable_reddit: bool = False
     tool_timeout_seconds: int = 10
