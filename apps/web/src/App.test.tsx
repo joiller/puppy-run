@@ -984,6 +984,45 @@ describe("App", () => {
     expect(createDecisionVersionMock).not.toHaveBeenCalled();
   });
 
+  it("keeps saved weight override visible when a completed session becomes context_changed", async () => {
+    const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    const contextChanged: DecisionSession = {
+      ...completed,
+      workflow_stage: "context_changed"
+    };
+    const workspace = makeCompletedWorkspace(completed);
+
+    listSessionsMock.mockImplementation(async () => [completed]);
+    getWorkspaceMock.mockImplementation(async () => workspace);
+    updateDraftMock.mockImplementation(async (_sessionId: string, draft: Phase2Draft) =>
+      makeCompletedWorkspace(contextChanged, {
+        draft,
+        gap_analysis: gapFromDraft(draft)
+      })
+    );
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Version 1 completed" })).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Weight for Runtime control and state"), {
+      target: { value: "45" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply Runtime control and state weight" }));
+
+    await waitFor(() => {
+      expect(within(screen.getByLabelText("Decision workspace")).getByText("context_changed")).toBeTruthy();
+      expect(
+        (screen.getByLabelText("Weight for Runtime control and state") as HTMLInputElement).value
+      ).toBe("45");
+    });
+  });
+
   it("ignores older same-session draft responses when draft saves resolve out of order", async () => {
     const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
     let workspace = makeCompletedWorkspace(completed);

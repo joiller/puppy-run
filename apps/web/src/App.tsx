@@ -106,6 +106,15 @@ function clampWeight(rawWeight: string, fallback: number): number {
   return Math.min(100, Math.max(0, Math.round(parsed)));
 }
 
+function weightDraftsForWorkspace(workspace: Workspace): Record<string, string> {
+  return Object.fromEntries(
+    workspace.criteria.map((criterion) => [
+      criterion.name,
+      String(workspace.draft.weight_overrides[criterion.name]?.weight ?? criterion.weight)
+    ])
+  );
+}
+
 function sourceMatches(item: { source_type: string | null }, sourceType: string | null): boolean {
   return !sourceType || item.source_type === sourceType;
 }
@@ -175,9 +184,7 @@ export default function App() {
       );
     });
     setSelectedVersionId(nextSelectedVersionId);
-    setWeightDrafts(
-      Object.fromEntries(nextWorkspace.criteria.map((criterion) => [criterion.name, String(criterion.weight)]))
-    );
+    setWeightDrafts(weightDraftsForWorkspace(nextWorkspace));
     setSelectedScoreCellId((currentCellId) =>
       currentCellId && nextWorkspace.score_cells.some((scoreCell) => scoreCell.id === currentCellId)
         ? currentCellId
