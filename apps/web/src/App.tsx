@@ -150,6 +150,7 @@ export default function App() {
   const workspaceRequestIdRef = useRef(0);
   const pendingWorkspaceLoadRequestIdRef = useRef<number | null>(null);
   const draftRequestIdRef = useRef(0);
+  const dirtyWeightNamesRef = useRef<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [isDraftBusy, setIsDraftBusy] = useState(false);
@@ -184,7 +185,15 @@ export default function App() {
       );
     });
     setSelectedVersionId(nextSelectedVersionId);
-    setWeightDrafts(weightDraftsForWorkspace(nextWorkspace));
+    setWeightDrafts((currentDrafts) => {
+      const nextDrafts = weightDraftsForWorkspace(nextWorkspace);
+      for (const weightName of dirtyWeightNamesRef.current) {
+        if (Object.hasOwn(nextDrafts, weightName) && currentDrafts[weightName] !== undefined) {
+          nextDrafts[weightName] = currentDrafts[weightName];
+        }
+      }
+      return nextDrafts;
+    });
     setSelectedScoreCellId((currentCellId) =>
       currentCellId && nextWorkspace.score_cells.some((scoreCell) => scoreCell.id === currentCellId)
         ? currentCellId
@@ -345,8 +354,8 @@ export default function App() {
     }
   }
 
-  async function persistDraft(nextDraft: Phase2Draft) {
-    if (!selected) return;
+  async function persistDraft(nextDraft: Phase2Draft): Promise<boolean> {
+    if (!selected) return false;
     const actionSessionId = selected.id;
     const actionVersionId = selectedVersionIdRef.current;
     const draftRequestId = ++draftRequestIdRef.current;
@@ -359,13 +368,15 @@ export default function App() {
         draftRequestId !== draftRequestIdRef.current ||
         !isCurrentActionResponse(actionSessionId, nextWorkspace.session.id, actionVersionId)
       ) {
-        return;
+        return false;
       }
       applyWorkspace(nextWorkspace, actionVersionId);
+      return true;
     } catch (err) {
       if (draftRequestId === draftRequestIdRef.current) {
         setError(String(err));
       }
+      return false;
     } finally {
       if (draftRequestId === draftRequestIdRef.current) {
         setIsDraftBusy(false);
@@ -415,7 +426,9 @@ export default function App() {
         reason: `User adjusted ${criterion.name} weight in the workbench.`
       }
     };
-    await persistDraft(nextDraft);
+    if (await persistDraft(nextDraft)) {
+      dirtyWeightNamesRef.current.delete(criterion.name);
+    }
   }
 
   async function handleAddCustomCandidate(event: FormEvent) {
@@ -699,7 +712,10 @@ export default function App() {
                     max={100}
                     min={0}
                     onChange={(event) =>
-                      setWeightDrafts((current) => ({ ...current, [criterion.name]: event.target.value }))
+                      setWeightDrafts((current) => {
+                        dirtyWeightNamesRef.current.add(criterion.name);
+                        return { ...current, [criterion.name]: event.target.value };
+                      })
                     }
                     type="number"
                     value={weightDrafts[criterion.name] ?? String(criterion.weight)}

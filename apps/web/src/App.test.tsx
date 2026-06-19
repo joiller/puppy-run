@@ -1023,6 +1023,41 @@ describe("App", () => {
     });
   });
 
+  it("does not overwrite an in-progress weight edit when polling refreshes the workspace", async () => {
+    const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
+    const workspace = makeCompletedWorkspace(completed);
+
+    listSessionsMock.mockImplementation(async () => [completed]);
+    getWorkspaceMock.mockImplementation(async () => workspace);
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Weight for Runtime control and state") as HTMLInputElement).value
+      ).toBe("30");
+    });
+
+    fireEvent.change(screen.getByLabelText("Weight for Runtime control and state"), {
+      target: { value: "45" }
+    });
+    expect(
+      (screen.getByLabelText("Weight for Runtime control and state") as HTMLInputElement).value
+    ).toBe("45");
+
+    await runPoll();
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Weight for Runtime control and state") as HTMLInputElement).value
+      ).toBe("45");
+    });
+    expect(updateDraftMock).not.toHaveBeenCalled();
+  });
+
   it("ignores older same-session draft responses when draft saves resolve out of order", async () => {
     const completed = makeSession("completed", "Recommended: LangGraph. It scored 92/100.");
     let workspace = makeCompletedWorkspace(completed);
