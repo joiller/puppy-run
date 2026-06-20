@@ -84,22 +84,15 @@ async def create_agent_run(db: AsyncSession, session_id: UUID) -> AgentRun:
     return run
 
 
+async def validate_phase2_version_request(db: AsyncSession, session_id: UUID) -> None:
+    await _phase2_version_request_context(db, session_id)
+
+
 async def create_phase2_version_run(
     db: AsyncSession,
     session_id: UUID,
 ) -> tuple[AgentRun, DecisionVersion]:
-    session = await db.get(DecisionSession, session_id)
-    if session is None:
-        raise ValueError(f"decision session not found: {session_id}")
-
-    raw_draft = _phase2_draft(session.decision_context)
-    draft = normalize_phase2_draft(raw_draft, None)
-    if raw_draft is None or not _draft_has_changes(draft):
-        raise Phase2VersionConflictError("no phase2 draft changes found")
-
-    source_version = await _completed_source_version(db, session_id, draft.get("source_version_id"))
-    if source_version is None:
-        raise Phase2VersionConflictError("no completed source version found")
+    session, draft, source_version = await _phase2_version_request_context(db, session_id)
     draft = normalize_phase2_draft(draft, source_version.id)
 
     run = AgentRun(session_id=session_id, status=AgentRunStatus.queued)
@@ -207,6 +200,26 @@ async def mark_run_completed(db: AsyncSession, run_id: UUID, summary: str) -> No
         )
     )
     await db.commit()
+
+
+async def _phase2_version_request_context(
+    db: AsyncSession,
+    session_id: UUID,
+) -> tuple[DecisionSession, dict, DecisionVersion]:
+    session = await db.get(DecisionSession, session_id)
+    if session is None:
+        raise ValueError(f"decision session not found: {session_id}")
+
+    raw_draft = _phase2_draft(session.decision_context)
+    draft = normalize_phase2_draft(raw_draft, None)
+    if raw_draft is None or not _draft_has_changes(draft):
+        raise Phase2VersionConflictError("no phase2 draft changes found")
+
+    source_version = await _completed_source_version(db, session_id, draft.get("source_version_id"))
+    if source_version is None:
+        raise Phase2VersionConflictError("no completed source version found")
+
+    return session, draft, source_version
 
 
 def _phase2_draft(context: dict | None) -> dict | None:

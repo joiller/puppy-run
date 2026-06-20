@@ -2,11 +2,16 @@ from typing import Annotated
 from uuid import UUID
 
 from arq import create_pool
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from puppyrun_api.config import get_settings
 from puppyrun_api.db import get_session
+from puppyrun_api.demo_limits import (
+    DemoSafetyPolicy,
+    RedisDemoLimitStore,
+    client_ip_from_request,
+)
 from puppyrun_api.repositories import sessions as session_repo
 from puppyrun_api.repositories import workspace as workspace_repo
 from puppyrun_api.schemas import (
@@ -38,17 +43,63 @@ router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
+def _demo_safety_is_enabled() -> bool:
+    return get_settings().demo_safety_enabled
+
+
+def _demo_policy(redis) -> DemoSafetyPolicy:
+    return DemoSafetyPolicy(settings=get_settings(), store=RedisDemoLimitStore(redis))
+
+
+async def _open_redis():
+    return await create_pool(redis_settings_from_url(get_settings().redis_url))
+
+
+async def _check_read_rate(request: Request) -> None:
+    if not _demo_safety_is_enabled():
+        return
+    redis = await _open_redis()
+    try:
+        await _demo_policy(redis).check_read_rate(
+            client_ip_from_request(request, get_settings())
+        )
+    finally:
+        await redis.close()
+
+
 @router.post("", response_model=DecisionSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(
     body: CreateDecisionSessionRequest,
+    request: Request,
     db: SessionDep,
 ) -> DecisionSessionResponse:
-    session = await session_repo.create_decision_session(db, body.prompt)
-    return DecisionSessionResponse.model_validate(session)
+    if not _demo_safety_is_enabled():
+        session = await session_repo.create_decision_session(db, body.prompt)
+        return DecisionSessionResponse.model_validate(session)
+
+    redis = await _open_redis()
+    policy = _demo_policy(redis)
+    receipt = None
+    try:
+        receipt = await policy.consume_session_create(
+            client_ip_from_request(request, get_settings())
+        )
+        session = await session_repo.create_decision_session(db, body.prompt)
+        return DecisionSessionResponse.model_validate(session)
+    except Exception:
+        if receipt is not None:
+            await policy.rollback_session_create(receipt)
+        raise
+    finally:
+        await redis.close()
 
 
 @router.get("", response_model=list[DecisionSessionResponse])
-async def list_sessions(db: SessionDep) -> list[DecisionSessionResponse]:
+async def list_sessions(
+    request: Request,
+    db: SessionDep,
+) -> list[DecisionSessionResponse]:
+    await _check_read_rate(request)
     sessions = await session_repo.list_decision_sessions(db)
     return [DecisionSessionResponse.model_validate(session) for session in sessions]
 
@@ -67,9 +118,11 @@ async def get_session_by_id(
 @router.get("/{session_id}/workspace", response_model=WorkspaceResponse)
 async def get_session_workspace(
     session_id: UUID,
+    request: Request,
     db: SessionDep,
     version_id: UUID | None = None,
 ) -> WorkspaceResponse:
+    await _check_read_rate(request)
     try:
         workspace = await workspace_repo.get_workspace(db, session_id, version_id=version_id)
     except ValueError as exc:
@@ -116,19 +169,30 @@ async def update_session_draft(
 @router.post("/{session_id}/runs", response_model=StartAgentRunResponse, status_code=202)
 async def start_agent_run(
     session_id: UUID,
+    request: Request,
     db: SessionDep,
 ) -> StartAgentRunResponse:
     session = await session_repo.get_decision_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="decision session not found")
 
-    run = await session_repo.create_agent_run(db, session_id)
-    redis = await create_pool(redis_settings_from_url(get_settings().redis_url))
+    redis = await _open_redis()
+    policy = _demo_policy(redis)
+    receipt = None
     try:
+        if _demo_safety_is_enabled():
+            receipt = await policy.consume_live_run(
+                client_ip_from_request(request, get_settings())
+            )
+        run = await session_repo.create_agent_run(db, session_id)
         job = await redis.enqueue_job(
             "run_phase1_agent_job", str(run.id), _job_id=f"phase1:{run.id}"
         )
         run.job_id = job.job_id if job is not None else f"phase1:{run.id}"
+    except Exception:
+        if receipt is not None:
+            await policy.rollback_live_run(receipt)
+        raise
     finally:
         await redis.close()
     await db.commit()
@@ -143,28 +207,47 @@ async def start_agent_run(
 @router.post("/{session_id}/versions", response_model=StartAgentRunResponse, status_code=202)
 async def create_phase2_version(
     session_id: UUID,
+    request: Request,
     db: SessionDep,
 ) -> StartAgentRunResponse:
     try:
-        run, _version = await session_repo.create_phase2_version_run(db, session_id)
+        await session_repo.validate_phase2_version_request(db, session_id)
     except session_repo.Phase2VersionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="decision session not found") from exc
 
-    redis = None
+    redis = await _open_redis()
+    policy = _demo_policy(redis)
+    receipt = None
+    run = None
     try:
-        redis = await create_pool(redis_settings_from_url(get_settings().redis_url))
+        if _demo_safety_is_enabled():
+            receipt = await policy.consume_live_run(
+                client_ip_from_request(request, get_settings())
+            )
+        run, _version = await session_repo.create_phase2_version_run(db, session_id)
         job = await redis.enqueue_job(
             "run_phase2_agent_job", str(run.id), _job_id=f"phase2:{run.id}"
         )
         run.job_id = job.job_id if job is not None else f"phase2:{run.id}"
+    except session_repo.Phase2VersionConflictError as exc:
+        if receipt is not None:
+            await policy.rollback_live_run(receipt)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        if receipt is not None:
+            await policy.rollback_live_run(receipt)
+        raise HTTPException(status_code=404, detail="decision session not found") from exc
     except Exception as exc:
+        if receipt is not None:
+            await policy.rollback_live_run(receipt)
+        if run is None:
+            raise
         await session_repo.mark_phase2_version_enqueue_failed(db, run.id, exc)
         raise HTTPException(status_code=503, detail="failed to enqueue phase2 run") from exc
     finally:
-        if redis is not None:
-            await redis.close()
+        await redis.close()
     await db.commit()
     session = await session_repo.get_decision_session(db, session_id)
     if session is None:
