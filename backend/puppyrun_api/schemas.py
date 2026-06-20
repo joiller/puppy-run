@@ -343,3 +343,27 @@ class WorkspaceResponse(BaseModel):
     score_cells: list[ScoreCellResponse]
     recommendations: list[RecommendationResponse]
     events: list[AgentEventResponse]
+
+
+class DemoSafetyErrorResponse(BaseModel):
+    code: str
+    message: str
+    limit: int | None = None
+    remaining: int | None = None
+    reset_at: datetime | None = None
+
+
+class DemoSafetyStatusResponse(BaseModel):
+    demo_safety_enabled: bool
+    live_demo_enabled: bool
+    global_live_run_daily_limit: int
+    global_live_runs_used: int
+    global_live_runs_remaining: int
+    live_run_daily_limit_per_ip: int
+    caller_live_runs_used: int
+    caller_live_runs_remaining: int
+    session_create_daily_limit_per_ip: int
+    caller_session_creates_used: int
+    caller_session_creates_remaining: int
+    read_rate_limit_per_minute_per_ip: int
+    reset_at: datetime
