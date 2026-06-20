@@ -51,3 +51,50 @@ def test_settings_exposes_normalized_sqlalchemy_database_url(monkeypatch) -> Non
     assert settings.sqlalchemy_database_url == (
         "postgresql+asyncpg://user:pass@postgres:5432/puppyrun"
     )
+
+
+def test_phase5_demo_safety_defaults_are_local_safe(monkeypatch) -> None:
+    for key in (
+        "PUPPYRUN_DEMO_SAFETY_ENABLED",
+        "PUPPYRUN_LIVE_DEMO_ENABLED",
+        "PUPPYRUN_ADMIN_TOKEN",
+        "PUPPYRUN_LIVE_RUN_DAILY_LIMIT",
+        "PUPPYRUN_LIVE_RUN_DAILY_LIMIT_PER_IP",
+        "PUPPYRUN_SESSION_CREATE_DAILY_LIMIT_PER_IP",
+        "PUPPYRUN_READ_RATE_LIMIT_PER_MINUTE_PER_IP",
+        "PUPPYRUN_CLIENT_IP_HEADER",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = Settings()
+
+    assert settings.demo_safety_enabled is False
+    assert settings.live_demo_enabled is False
+    assert settings.admin_token is None
+    assert settings.live_run_daily_limit == 20
+    assert settings.live_run_daily_limit_per_ip == 3
+    assert settings.session_create_daily_limit_per_ip == 10
+    assert settings.read_rate_limit_per_minute_per_ip == 120
+    assert settings.client_ip_header is None
+
+
+def test_phase5_demo_safety_reads_public_demo_env(monkeypatch) -> None:
+    monkeypatch.setenv("PUPPYRUN_DEMO_SAFETY_ENABLED", "true")
+    monkeypatch.setenv("PUPPYRUN_LIVE_DEMO_ENABLED", "true")
+    monkeypatch.setenv("PUPPYRUN_ADMIN_TOKEN", "private-admin-token")
+    monkeypatch.setenv("PUPPYRUN_LIVE_RUN_DAILY_LIMIT", "21")
+    monkeypatch.setenv("PUPPYRUN_LIVE_RUN_DAILY_LIMIT_PER_IP", "4")
+    monkeypatch.setenv("PUPPYRUN_SESSION_CREATE_DAILY_LIMIT_PER_IP", "11")
+    monkeypatch.setenv("PUPPYRUN_READ_RATE_LIMIT_PER_MINUTE_PER_IP", "121")
+    monkeypatch.setenv("PUPPYRUN_CLIENT_IP_HEADER", "X-Forwarded-For")
+
+    settings = Settings()
+
+    assert settings.demo_safety_enabled is True
+    assert settings.live_demo_enabled is True
+    assert settings.admin_token == "private-admin-token"
+    assert settings.live_run_daily_limit == 21
+    assert settings.live_run_daily_limit_per_ip == 4
+    assert settings.session_create_daily_limit_per_ip == 11
+    assert settings.read_rate_limit_per_minute_per_ip == 121
+    assert settings.client_ip_header == "X-Forwarded-For"

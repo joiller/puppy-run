@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     tavily_api_key: str | None = None
     enable_reddit: bool = False
+    demo_safety_enabled: bool = False
+    live_demo_enabled: bool = False
+    admin_token: str | None = None
+    live_run_daily_limit: int = 20
+    live_run_daily_limit_per_ip: int = 3
+    session_create_daily_limit_per_ip: int = 10
+    read_rate_limit_per_minute_per_ip: int = 120
+    client_ip_header: str | None = None
     tool_timeout_seconds: int = 10
     tool_retry_count: int = 1
     phase3_max_results_per_source: int = 5
