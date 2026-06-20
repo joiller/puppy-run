@@ -25,3 +25,10 @@ Do not include real hosts, raw IPs, SSH targets, tokens, credentials, secrets, o
 - **Evidence:** `backend/puppyrun_eval/`, `backend/tests/test_phase4_eval.py`, `docs/superpowers/specs/2026-06-19-puppyrun-phase-4-live-eval-design.md`, local backend tests, Docker image import checks, and live report `.eval-reports/phase4-live-20260619-183552.md`.
 - **Status:** Implemented and verified locally; live DeepSeek acceptance passed for all four required Phase 4 cases in the current release session.
 - **Interview angle:** Explain how the eval runner separates blocked provider setup, provider response failures, quality regressions, and harness bugs while keeping reports useful for release decisions and safe for repository work.
+
+### Phase 5 public live demo safety shell
+
+- **What shipped:** Added Redis-backed public demo quotas, live-run kill switch, token-protected admin controls, frontend quota messaging, and VPS configuration for a no-login live DeepSeek demo.
+- **Why it matters:** Turns PuppyRun from a local/live-eval prototype into a safer public demo by bounding cost, limiting abuse, and giving the operator a runtime shutoff without full RBAC.
+- **Evidence:** Phase 5 backend and frontend tests, Docker Compose config check, Docker smoke, and local browser/admin acceptance from this Phase 5 release session.
+- **Status:** Implemented and verified in Phase 5.

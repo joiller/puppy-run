@@ -49,6 +49,23 @@ POSTGRES_PASSWORD_URLENCODED=replace-with-a-strong-password
 PUPPYRUN_CORS_ORIGINS=["https://demo.example.com"]
 ```
 
+### Phase 5 public demo safety
+
+For a public live DeepSeek demo, set these values in `deploy/vps/.env`:
+
+```env
+PUPPYRUN_DEMO_SAFETY_ENABLED=true
+PUPPYRUN_LIVE_DEMO_ENABLED=true
+PUPPYRUN_ADMIN_TOKEN=replace-with-private-admin-token
+PUPPYRUN_LIVE_RUN_DAILY_LIMIT=20
+PUPPYRUN_LIVE_RUN_DAILY_LIMIT_PER_IP=3
+PUPPYRUN_SESSION_CREATE_DAILY_LIMIT_PER_IP=10
+PUPPYRUN_READ_RATE_LIMIT_PER_MINUTE_PER_IP=120
+PUPPYRUN_CLIENT_IP_HEADER=X-Forwarded-For
+```
+
+Do not commit the real admin token. After deployment, open `/admin`, enter the token, confirm the current counts, disable live demo, verify new runs are blocked, then re-enable it.
+
 Start the stack:
 
 ```sh

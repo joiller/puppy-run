@@ -256,6 +256,29 @@ Public URL status:
 - Domain DNS and HTTPS setup are external VPS/domain operations, not a remaining repository task.
 - Real public hosts are intentionally not committed to this repository. Keep them in the VPS `deploy/vps/.env` file or private deployment notes.
 
+## Phase 5 Public Demo Safety
+
+Phase 5 v1 protects the no-login public demo when live DeepSeek is enabled. The API uses Redis-backed counters for a global daily live-run quota, a per-IP daily live-run quota, a per-IP daily session-create quota, and a fixed-minute read limit for polling-heavy endpoints.
+
+Default public-demo limits:
+
+- global live runs per day: `20`
+- live runs per IP per day: `3`
+- sessions created per IP per day: `10`
+- read requests per IP per minute: `120`
+
+The owner can use the token-protected `/admin` UI or `/api/v1/admin/demo/*` API to check current counts and disable or re-enable new live runs. Keep `PUPPYRUN_ADMIN_TOKEN` in private environment files only.
+
+Phase 5 local verification:
+
+```bash
+cd backend && .venv/bin/ruff check .
+cd backend && .venv/bin/pytest -q
+cd apps/web && npm test -- --run
+cd apps/web && npm run build
+git diff --check
+```
+
 ## Public Demo Deployment
 
 Phase 0 public demo deployment targets a VPS. The intended topology is:
