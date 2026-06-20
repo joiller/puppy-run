@@ -153,6 +153,7 @@ function errorMessage(err: unknown): string {
 }
 
 export default function App() {
+  const isAdminRoute = window.location.pathname === "/admin";
   const [prompt, setPrompt] = useState(samplePrompt);
   const [sessions, setSessions] = useState<DecisionSession[]>([]);
   const [selected, setSelected] = useState<DecisionSession | null>(null);
@@ -176,12 +177,11 @@ export default function App() {
   const [isDraftBusy, setIsDraftBusy] = useState(false);
   const [isVersionBusy, setIsVersionBusy] = useState(false);
   const [adminToken, setAdminToken] = useState(
-    () => window.localStorage.getItem("puppyrun-admin-token") ?? ""
+    () => (isAdminRoute ? window.localStorage.getItem("puppyrun-admin-token") ?? "" : "")
   );
   const [adminStatus, setAdminStatus] = useState<DemoSafetyStatus | null>(null);
   const [adminError, setAdminError] = useState<string | null>(null);
   const [isAdminBusy, setIsAdminBusy] = useState(false);
-  const isAdminRoute = window.location.pathname === "/admin";
 
   function setSelectedVersionId(versionId: string | null) {
     selectedVersionIdRef.current = versionId;
@@ -324,9 +324,10 @@ export default function App() {
   async function loadAdminStatus() {
     setIsAdminBusy(true);
     setAdminError(null);
+    const trimmedAdminToken = adminToken.trim();
     try {
-      window.localStorage.setItem("puppyrun-admin-token", adminToken);
-      setAdminStatus(await getDemoStatus(adminToken));
+      window.localStorage.setItem("puppyrun-admin-token", trimmedAdminToken);
+      setAdminStatus(await getDemoStatus(trimmedAdminToken));
     } catch (err) {
       setAdminError(errorMessage(err));
     } finally {
@@ -337,9 +338,10 @@ export default function App() {
   async function handleAdminToggle(enabled: boolean) {
     setIsAdminBusy(true);
     setAdminError(null);
+    const trimmedAdminToken = adminToken.trim();
     try {
-      window.localStorage.setItem("puppyrun-admin-token", adminToken);
-      setAdminStatus(await setDemoLiveEnabled(adminToken, enabled));
+      window.localStorage.setItem("puppyrun-admin-token", trimmedAdminToken);
+      setAdminStatus(await setDemoLiveEnabled(trimmedAdminToken, enabled));
     } catch (err) {
       setAdminError(errorMessage(err));
     } finally {
@@ -595,6 +597,7 @@ export default function App() {
     () => (workspace ? toolCallsGroupedByStatusAndSource(workspace, sourceTypeFilter) : []),
     [workspace, sourceTypeFilter]
   );
+  const trimmedAdminToken = adminToken.trim();
 
   if (isAdminRoute) {
     return (
@@ -611,21 +614,21 @@ export default function App() {
           />
           <div className="admin-actions">
             <button
-              disabled={isAdminBusy || adminToken.trim().length === 0}
+              disabled={isAdminBusy || trimmedAdminToken.length === 0}
               onClick={loadAdminStatus}
               type="button"
             >
               Load admin status
             </button>
             <button
-              disabled={isAdminBusy || !adminStatus}
+              disabled={isAdminBusy || !adminStatus || !adminStatus.live_demo_enabled}
               onClick={() => handleAdminToggle(false)}
               type="button"
             >
               Disable live demo
             </button>
             <button
-              disabled={isAdminBusy || !adminStatus}
+              disabled={isAdminBusy || !adminStatus || adminStatus.live_demo_enabled}
               onClick={() => handleAdminToggle(true)}
               type="button"
             >

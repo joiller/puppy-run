@@ -774,6 +774,8 @@ describe("api functions", () => {
 describe("App", () => {
   beforeEach(() => {
     triggerPoll = null;
+    window.history.pushState({}, "", "/");
+    window.localStorage.clear();
     vi.spyOn(window, "setInterval").mockImplementation((handler: TimerHandler, timeout?: number) => {
       if (timeout === 2000 && typeof handler === "function") {
         triggerPoll = handler as () => void;
@@ -794,6 +796,8 @@ describe("App", () => {
 
   afterEach(() => {
     cleanup();
+    window.history.pushState({}, "", "/");
+    window.localStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -866,30 +870,61 @@ describe("App", () => {
     expect(listSessionsMock).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("Admin token"), {
-      target: { value: "private-admin-token" }
+      target: { value: " private-admin-token " }
     });
     fireEvent.click(screen.getByRole("button", { name: "Load admin status" }));
 
     await waitFor(() => {
+      expect(getDemoStatusMock).toHaveBeenCalledWith("private-admin-token");
       expect(screen.getByText("Live demo enabled")).toBeTruthy();
       expect(screen.getByText("4 / 20")).toBeTruthy();
     });
+    expect((screen.getByRole("button", { name: "Disable live demo" }) as HTMLButtonElement).disabled)
+      .toBe(false);
+    expect((screen.getByRole("button", { name: "Enable live demo" }) as HTMLButtonElement).disabled)
+      .toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Disable live demo" }));
     await waitFor(() => {
       expect(setDemoLiveEnabledMock).toHaveBeenCalledWith("private-admin-token", false);
       expect(screen.getByText("Live demo disabled")).toBeTruthy();
     });
+    expect((screen.getByRole("button", { name: "Disable live demo" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect((screen.getByRole("button", { name: "Enable live demo" }) as HTMLButtonElement).disabled)
+      .toBe(false);
+  });
+
+  it("shows admin load errors inline", async () => {
+    window.history.pushState({}, "", "/admin");
+    getDemoStatusMock.mockRejectedValue(new Error("Admin token rejected."));
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("Admin token"), {
+      target: { value: " private-admin-token " }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load admin status" }));
+
+    await waitFor(() => {
+      expect(getDemoStatusMock).toHaveBeenCalledWith("private-admin-token");
+      expect(screen.getByText("Admin token rejected.")).toBeTruthy();
+    });
   });
 
   it("keeps admin token out of public workbench", async () => {
     window.history.pushState({}, "", "/");
+    window.localStorage.setItem("puppyrun-admin-token", "private-admin-token");
+    const getItemSpy = vi.spyOn(Storage.prototype, "getItem");
     listSessionsMock.mockResolvedValue([]);
 
     render(<App />);
     await flushAsyncUpdates();
 
     expect(screen.queryByLabelText("Admin token")).toBeNull();
+    expect(screen.queryByDisplayValue("private-admin-token")).toBeNull();
+    expect(getItemSpy).not.toHaveBeenCalled();
+    expect(getDemoStatusMock).not.toHaveBeenCalled();
+    expect(setDemoLiveEnabledMock).not.toHaveBeenCalled();
   });
 
   it("shows clarification, recommendation, evidence, trace, version, matrix, drawer, and ADR for a Phase 1 run", async () => {
