@@ -10,6 +10,8 @@ Phase 2 adds the interactive decision workbench: versioned recommendations, expl
 
 Phase 3 adds evidence and risk verification: versioned tool-call traces, source evidence, extracted claims, risk signals, verification tasks, conservative confirmed-risk score adjustments, risk-aware recommendation/ADR output, and workbench panels for risk details and source filtering.
 
+Phase 4 adds a local DeepSeek live regression eval gate for the real provider path. It writes structured JSON and human-readable Markdown reports under `backend/.eval-reports/`; missing live credentials are treated as `blocked`, not as a passing verification.
+
 To increase GitHub API rate limits in a public deployment, set `PUPPYRUN_GITHUB_TOKEN` in the deployment environment. The token is optional for local smoke tests and must not be committed.
 
 Phase 3 uses `PUPPYRUN_LLM_PROVIDER=deterministic` by default, so no-key local and Docker smoke tests do not make live LLM calls. Optional live extraction can use `PUPPYRUN_LLM_PROVIDER=openai` with `PUPPYRUN_OPENAI_API_KEY`, or `PUPPYRUN_LLM_PROVIDER=deepseek` with `PUPPYRUN_DEEPSEEK_API_KEY`; keep credential values in private local environment files or shell exports only. Reddit collection is gated by `PUPPYRUN_ENABLE_REDDIT=false` and remains disabled by default.
@@ -23,6 +25,7 @@ Phase 0 remains closed at the repository scope: the local deployable skeleton an
 - [Phase 1 implementation plan](docs/superpowers/plans/2026-05-27-puppyrun-phase-1-plan.md)
 - [Phase 2 implementation plan](docs/superpowers/plans/2026-06-04-puppyrun-phase-2-plan.md)
 - [Phase 3 implementation plan](docs/superpowers/plans/2026-06-08-puppyrun-phase-3-plan.md)
+- [Phase 4 live eval design](docs/superpowers/specs/2026-06-19-puppyrun-phase-4-live-eval-design.md)
 - [Accepted debt](docs/accepted-debt.md)
 - [VPS public demo deployment design](docs/superpowers/specs/2026-05-23-puppyrun-public-demo-deployment-design.md)
 - [VPS public demo deployment plan](docs/superpowers/plans/2026-05-23-puppyrun-public-demo-deployment-plan.md)
@@ -208,6 +211,41 @@ Expected Phase 3 browser acceptance at `http://localhost:5173`:
 9. Confirm `v2` contains versioned Phase 3 rows and `v1` remains readable from the version rail.
 
 Only confirmed risks affect scores, capped conservatively. Contradicted, unresolved, and unverified risks remain visible but do not change score. Reddit remains gated and disabled by default; do not enable it without a deliberate private local setup.
+
+## Phase 4 Live Eval Gate
+
+Phase 4 live eval is a manual release or merge gate for the real DeepSeek provider path. Run it after deterministic checks and before claiming live LLM readiness.
+
+Local deterministic preflight:
+
+```bash
+cd backend
+. .venv/bin/activate
+ruff check .
+pytest tests/test_phase3_llm_providers.py tests/test_phase3_workflow.py -q
+pytest tests/test_phase4_eval.py -q
+cd ..
+git diff --check
+```
+
+Live DeepSeek acceptance:
+
+```bash
+cd backend
+PUPPYRUN_LLM_PROVIDER=deepseek \
+PUPPYRUN_DEEPSEEK_API_KEY=<private value> \
+.venv/bin/python -m puppyrun_eval run --suite phase4-live
+```
+
+Optional model and base URL overrides can be supplied through the existing `PUPPYRUN_DEEPSEEK_MODEL` and `PUPPYRUN_DEEPSEEK_BASE_URL` environment variables. Keep all credential values in private shell exports or local env files only.
+
+Interpret the command result as follows:
+
+- Exit `0`: all required live eval cases passed.
+- Exit `1`: at least one provider response, quality, or runner failure must be investigated before claiming live readiness.
+- Exit `2`: the suite was blocked, commonly because `PUPPYRUN_DEEPSEEK_API_KEY` was not supplied; do not claim Phase 4 live eval passed.
+
+The command writes JSON and Markdown reports under `backend/.eval-reports/`. Review the Markdown summary for failed or blocked cases, keep reports out of git, and verify that no credential, bearer token, raw private host, SSH target, or full raw community thread appears before sharing a report outside the local machine.
 
 Public URL status:
 

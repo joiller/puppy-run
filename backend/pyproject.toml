@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "PuppyRun API and worker"
 requires-python = ">=3.12"
 dependencies = [
+  "aiosqlite>=0.20.0",
   "alembic>=1.13.0",
   "arq>=0.26.0",
   "asyncpg>=0.29.0",
@@ -23,7 +24,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "aiosqlite>=0.20.0",
   "pytest>=8.0.0",
   "pytest-asyncio>=0.24.0",
   "ruff>=0.8.0",
@@ -42,4 +42,4 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["puppyrun_api*", "puppyrun_worker*", "puppyrun_agent*"]
+include = ["puppyrun_api*", "puppyrun_worker*", "puppyrun_agent*", "puppyrun_eval*"]

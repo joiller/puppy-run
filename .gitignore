@@ -25,6 +25,7 @@ apps/web/dist/
 
 # Runtime
 *.log
+backend/.eval-reports/
 
 # Local worktrees
 .worktrees/

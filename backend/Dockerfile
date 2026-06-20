@@ -11,6 +11,7 @@ COPY migrations /app/migrations
 COPY puppyrun_api /app/puppyrun_api
 COPY puppyrun_worker /app/puppyrun_worker
 COPY puppyrun_agent /app/puppyrun_agent
+COPY puppyrun_eval /app/puppyrun_eval
 
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
 

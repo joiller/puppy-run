@@ -11,6 +11,27 @@ StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 COMMUNITY_SOURCE_TYPES = {"reddit", "hacker_news", "stack_exchange"}
 STRONG_SOURCE_TYPES = {"official_docs", "github_release", "github_issue", "arxiv", "technical_blog"}
+STRONG_SOURCE_TYPE_ALIASES = {
+    "academic_paper": "arxiv",
+    "blog": "technical_blog",
+    "documentation": "official_docs",
+    "docs": "official_docs",
+    "engineering_blog": "technical_blog",
+    "github_issues": "github_issue",
+    "github_pr": "github_issue",
+    "github_pull_request": "github_issue",
+    "github_releases": "github_release",
+    "issue": "github_issue",
+    "official_documentation": "official_docs",
+    "official_release": "github_release",
+    "paper": "arxiv",
+    "pull_request": "github_issue",
+    "release": "github_release",
+    "release_notes": "github_release",
+    "releases": "github_release",
+    "source_code": "official_docs",
+    "technical_writeup": "technical_blog",
+}
 DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
 UNSUPPORTED_STRICT_SCHEMA_KEYS = {
     "default",
@@ -242,10 +263,10 @@ class OpenAILLMProvider:
     def plan_verification(self, risks: list[RiskCluster]) -> VerificationPlan:
         payload = self._create_structured_response(
             schema_model=VerificationPlan,
-            task="Create verification tasks that target stronger source types.",
+            task=_verification_plan_task(),
             data={"risks": [risk.model_dump() for risk in risks]},
         )
-        return VerificationPlan.model_validate(payload)
+        return _normalize_verification_plan(VerificationPlan.model_validate(payload))
 
     def verify_risk(
         self,
@@ -360,10 +381,10 @@ class DeepSeekLLMProvider:
     def plan_verification(self, risks: list[RiskCluster]) -> VerificationPlan:
         payload = self._create_json_response(
             schema_model=VerificationPlan,
-            task="Create verification tasks that target stronger source types.",
+            task=_verification_plan_task(),
             data={"risks": [risk.model_dump() for risk in risks]},
         )
-        return VerificationPlan.model_validate(payload)
+        return _normalize_verification_plan(VerificationPlan.model_validate(payload))
 
     def verify_risk(
         self,
@@ -555,6 +576,36 @@ def _deepseek_system_prompt(schema_model: type[BaseModel]) -> str:
     )
 
 
+def _verification_plan_task() -> str:
+    allowed = ", ".join(sorted(STRONG_SOURCE_TYPES))
+    return (
+        "Create verification tasks that target stronger source types. "
+        f"Use stronger_source_type as exactly one of: {allowed}."
+    )
+
+
+def normalize_strong_source_type(source_type: object) -> str:
+    normalized = str(source_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in STRONG_SOURCE_TYPES:
+        return normalized
+    return STRONG_SOURCE_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _normalize_verification_plan(plan: VerificationPlan) -> VerificationPlan:
+    return VerificationPlan(
+        tasks=[
+            task.model_copy(
+                update={
+                    "stronger_source_type": normalize_strong_source_type(
+                        task.stronger_source_type
+                    )
+                }
+            )
+            for task in plan.tasks
+        ]
+    )
+
+
 def _enforce_low_trust_risk_policy(
     risk_clusters: RiskClusters,
     claims: list[ExtractedClaim],
@@ -589,6 +640,9 @@ def _risk_only_has_low_trust_support(risk: RiskCluster, claims: list[ExtractedCl
 
 
 def _enforce_verdict_source_policy(verdict: VerificationVerdict) -> VerificationVerdict:
+    source_type = normalize_strong_source_type(verdict.source_type)
+    if source_type != (verdict.source_type or ""):
+        verdict = verdict.model_copy(update={"source_type": source_type or None})
     if verdict.verdict != "confirmed":
         return verdict
     if verdict.source_type in STRONG_SOURCE_TYPES:

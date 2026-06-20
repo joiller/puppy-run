@@ -18,4 +18,10 @@ Do not include real hosts, raw IPs, SSH targets, tokens, credentials, secrets, o
 
 ## Highlights
 
-No entries have been recorded yet. Add entries here as scoped work produces verified resume-worthy or interview-worthy material.
+### Phase 4 DeepSeek live eval gate
+
+- **Highlight:** Built a manual live regression eval gate that exercises PuppyRun's real DeepSeek provider path and records release-gate evidence as structured JSON plus Markdown.
+- **Why it matters:** The gate targets the failure class deterministic tests missed in Phase 3: provider wiring, strict schema compatibility, low-trust risk handling, workflow fallback masking, and report-safe error handling on the live LLM path.
+- **Evidence:** `backend/puppyrun_eval/`, `backend/tests/test_phase4_eval.py`, `docs/superpowers/specs/2026-06-19-puppyrun-phase-4-live-eval-design.md`, local backend tests, Docker image import checks, and live report `.eval-reports/phase4-live-20260619-183552.md`.
+- **Status:** Implemented and verified locally; live DeepSeek acceptance passed for all four required Phase 4 cases in the current release session.
+- **Interview angle:** Explain how the eval runner separates blocked provider setup, provider response failures, quality regressions, and harness bugs while keeping reports useful for release decisions and safe for repository work.
