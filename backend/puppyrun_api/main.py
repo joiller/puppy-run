@@ -1,10 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from puppyrun_api.config import get_settings
 from puppyrun_api.demo_limits import DemoSafetyException
-from puppyrun_api.routes import health, sessions
+from puppyrun_api.routes import admin, health, sessions
 
 
 def create_app() -> FastAPI:
@@ -30,6 +30,17 @@ def create_app() -> FastAPI:
             content=exc.payload.model_dump(mode="json"),
         )
 
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(_request, exc: HTTPException) -> JSONResponse:
+        if (
+            isinstance(exc.detail, dict)
+            and "code" in exc.detail
+            and "message" in exc.detail
+        ):
+            return JSONResponse(status_code=exc.status_code, content=exc.detail)
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    app.include_router(admin.router)
     app.include_router(health.router)
     app.include_router(sessions.router)
     return app
