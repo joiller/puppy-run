@@ -3,9 +3,11 @@ import {
   ApiError,
   createDecisionVersion,
   createSession,
+  getDemoStatus,
   getWorkspace,
   listSessions,
   sendMessage,
+  setDemoLiveEnabled,
   startRun,
   updateDraft
 } from "./api";
@@ -14,6 +16,7 @@ import type {
   DecisionCandidate,
   DecisionCriterion,
   DecisionSession,
+  DemoSafetyStatus,
   Phase2Draft,
   Workspace
 } from "./types";
@@ -172,6 +175,13 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [isDraftBusy, setIsDraftBusy] = useState(false);
   const [isVersionBusy, setIsVersionBusy] = useState(false);
+  const [adminToken, setAdminToken] = useState(
+    () => window.localStorage.getItem("puppyrun-admin-token") ?? ""
+  );
+  const [adminStatus, setAdminStatus] = useState<DemoSafetyStatus | null>(null);
+  const [adminError, setAdminError] = useState<string | null>(null);
+  const [isAdminBusy, setIsAdminBusy] = useState(false);
+  const isAdminRoute = window.location.pathname === "/admin";
 
   function setSelectedVersionId(versionId: string | null) {
     selectedVersionIdRef.current = versionId;
@@ -301,12 +311,41 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (isAdminRoute) {
+      return undefined;
+    }
     refreshSessions().catch((err: unknown) => setError(errorMessage(err)));
     const timer = window.setInterval(() => {
       refreshSessions().catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [isAdminRoute]);
+
+  async function loadAdminStatus() {
+    setIsAdminBusy(true);
+    setAdminError(null);
+    try {
+      window.localStorage.setItem("puppyrun-admin-token", adminToken);
+      setAdminStatus(await getDemoStatus(adminToken));
+    } catch (err) {
+      setAdminError(errorMessage(err));
+    } finally {
+      setIsAdminBusy(false);
+    }
+  }
+
+  async function handleAdminToggle(enabled: boolean) {
+    setIsAdminBusy(true);
+    setAdminError(null);
+    try {
+      window.localStorage.setItem("puppyrun-admin-token", adminToken);
+      setAdminStatus(await setDemoLiveEnabled(adminToken, enabled));
+    } catch (err) {
+      setAdminError(errorMessage(err));
+    } finally {
+      setIsAdminBusy(false);
+    }
+  }
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
@@ -556,6 +595,82 @@ export default function App() {
     () => (workspace ? toolCallsGroupedByStatusAndSource(workspace, sourceTypeFilter) : []),
     [workspace, sourceTypeFilter]
   );
+
+  if (isAdminRoute) {
+    return (
+      <main className="app-shell admin-shell">
+        <section className="admin-panel" aria-label="Demo admin">
+          <p className="eyebrow">PuppyRun Phase 5</p>
+          <h1>Public demo controls</h1>
+          <label htmlFor="admin-token">Admin token</label>
+          <input
+            id="admin-token"
+            onChange={(event) => setAdminToken(event.target.value)}
+            type="password"
+            value={adminToken}
+          />
+          <div className="admin-actions">
+            <button
+              disabled={isAdminBusy || adminToken.trim().length === 0}
+              onClick={loadAdminStatus}
+              type="button"
+            >
+              Load admin status
+            </button>
+            <button
+              disabled={isAdminBusy || !adminStatus}
+              onClick={() => handleAdminToggle(false)}
+              type="button"
+            >
+              Disable live demo
+            </button>
+            <button
+              disabled={isAdminBusy || !adminStatus}
+              onClick={() => handleAdminToggle(true)}
+              type="button"
+            >
+              Enable live demo
+            </button>
+          </div>
+          {adminError && <p className="error">{adminError}</p>}
+          {adminStatus && (
+            <section className="admin-status" aria-label="Demo safety status">
+              <h2>{adminStatus.live_demo_enabled ? "Live demo enabled" : "Live demo disabled"}</h2>
+              <dl>
+                <div>
+                  <dt>Global live runs</dt>
+                  <dd>
+                    {adminStatus.global_live_runs_used} / {adminStatus.global_live_run_daily_limit}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Your live runs</dt>
+                  <dd>
+                    {adminStatus.caller_live_runs_used} / {adminStatus.live_run_daily_limit_per_ip}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Your sessions</dt>
+                  <dd>
+                    {adminStatus.caller_session_creates_used} /{" "}
+                    {adminStatus.session_create_daily_limit_per_ip}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Read limit</dt>
+                  <dd>{adminStatus.read_rate_limit_per_minute_per_ip} / minute</dd>
+                </div>
+                <div>
+                  <dt>Reset</dt>
+                  <dd>{new Date(adminStatus.reset_at).toLocaleString()}</dd>
+                </div>
+              </dl>
+            </section>
+          )}
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">

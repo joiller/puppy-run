@@ -615,6 +615,60 @@ button:disabled {
   margin: 0;
 }
 
+.admin-shell {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 20px;
+}
+
+.admin-panel {
+  width: min(720px, 100%);
+  background: #ffffff;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+.admin-panel h1 {
+  font-size: 24px;
+  line-height: 1.2;
+  margin: 4px 0 20px;
+}
+
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.admin-status {
+  border-top: 1px solid #e4e8ee;
+  margin-top: 20px;
+  padding-top: 20px;
+}
+
+.admin-status dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.admin-status dt {
+  color: #526071;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.admin-status dd {
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+
 @media (max-width: 1100px) {
   .workspace-grid {
     grid-template-columns: 1fr;

@@ -4,9 +4,11 @@ import App from "./App";
 import {
   createDecisionVersion,
   createSession,
+  getDemoStatus,
   getWorkspace,
   listSessions,
   sendMessage,
+  setDemoLiveEnabled,
   startRun,
   updateDraft
 } from "./api";
@@ -35,18 +37,22 @@ vi.mock("./api", () => ({
   ApiError: class ApiError extends Error {},
   createDecisionVersion: vi.fn(),
   createSession: vi.fn(),
+  getDemoStatus: vi.fn(),
   getWorkspace: vi.fn(),
   listSessions: vi.fn(),
   sendMessage: vi.fn(),
+  setDemoLiveEnabled: vi.fn(),
   startRun: vi.fn(),
   updateDraft: vi.fn()
 }));
 
 const createDecisionVersionMock = vi.mocked(createDecisionVersion);
 const createSessionMock = vi.mocked(createSession);
+const getDemoStatusMock = vi.mocked(getDemoStatus);
 const getWorkspaceMock = vi.mocked(getWorkspace);
 const listSessionsMock = vi.mocked(listSessions);
 const sendMessageMock = vi.mocked(sendMessage);
+const setDemoLiveEnabledMock = vi.mocked(setDemoLiveEnabled);
 const startRunMock = vi.mocked(startRun);
 const updateDraftMock = vi.mocked(updateDraft);
 let triggerPoll: (() => void) | null = null;
@@ -777,9 +783,11 @@ describe("App", () => {
     vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
     createDecisionVersionMock.mockReset();
     createSessionMock.mockReset();
+    getDemoStatusMock.mockReset();
     getWorkspaceMock.mockReset();
     listSessionsMock.mockReset();
     sendMessageMock.mockReset();
+    setDemoLiveEnabledMock.mockReset();
     startRunMock.mockReset();
     updateDraftMock.mockReset();
   });
@@ -817,6 +825,71 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByText(/public live demo has reached today's run limit/i)).toBeTruthy();
     });
+  });
+
+  it("shows admin status and toggles live demo on the admin route", async () => {
+    window.history.pushState({}, "", "/admin");
+    getDemoStatusMock.mockResolvedValue({
+      demo_safety_enabled: true,
+      live_demo_enabled: true,
+      global_live_run_daily_limit: 20,
+      global_live_runs_used: 4,
+      global_live_runs_remaining: 16,
+      live_run_daily_limit_per_ip: 3,
+      caller_live_runs_used: 1,
+      caller_live_runs_remaining: 2,
+      session_create_daily_limit_per_ip: 10,
+      caller_session_creates_used: 2,
+      caller_session_creates_remaining: 8,
+      read_rate_limit_per_minute_per_ip: 120,
+      reset_at: "2026-06-21T00:00:00Z"
+    });
+    setDemoLiveEnabledMock.mockResolvedValue({
+      demo_safety_enabled: true,
+      live_demo_enabled: false,
+      global_live_run_daily_limit: 20,
+      global_live_runs_used: 4,
+      global_live_runs_remaining: 16,
+      live_run_daily_limit_per_ip: 3,
+      caller_live_runs_used: 1,
+      caller_live_runs_remaining: 2,
+      session_create_daily_limit_per_ip: 10,
+      caller_session_creates_used: 2,
+      caller_session_creates_remaining: 8,
+      read_rate_limit_per_minute_per_ip: 120,
+      reset_at: "2026-06-21T00:00:00Z"
+    });
+
+    render(<App />);
+    await flushAsyncUpdates();
+
+    expect(listSessionsMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Admin token"), {
+      target: { value: "private-admin-token" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load admin status" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Live demo enabled")).toBeTruthy();
+      expect(screen.getByText("4 / 20")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Disable live demo" }));
+    await waitFor(() => {
+      expect(setDemoLiveEnabledMock).toHaveBeenCalledWith("private-admin-token", false);
+      expect(screen.getByText("Live demo disabled")).toBeTruthy();
+    });
+  });
+
+  it("keeps admin token out of public workbench", async () => {
+    window.history.pushState({}, "", "/");
+    listSessionsMock.mockResolvedValue([]);
+
+    render(<App />);
+    await flushAsyncUpdates();
+
+    expect(screen.queryByLabelText("Admin token")).toBeNull();
   });
 
   it("shows clarification, recommendation, evidence, trace, version, matrix, drawer, and ADR for a Phase 1 run", async () => {
