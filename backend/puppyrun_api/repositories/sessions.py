@@ -170,6 +170,41 @@ async def mark_phase2_version_enqueue_failed(
     await db.commit()
 
 
+async def mark_agent_run_enqueue_failed(
+    db: AsyncSession,
+    run_id: UUID,
+    exc: Exception,
+) -> None:
+    await db.rollback()
+
+    run = await db.get(AgentRun, run_id)
+    if run is None:
+        return
+
+    session = await db.get(DecisionSession, run.session_id)
+    message = str(exc)
+    failure = {
+        "error": message,
+        "error_type": type(exc).__name__,
+        "phase": "enqueue",
+    }
+
+    run.status = AgentRunStatus.failed
+    if session is not None:
+        session.status = DecisionSessionStatus.failed
+        session.workflow_stage = "failed"
+
+    db.add(
+        AgentEvent(
+            run_id=run.id,
+            event_type="phase1_enqueue_failed",
+            message=f"Phase 1 enqueue failed: {message}",
+            payload=failure,
+        )
+    )
+    await db.commit()
+
+
 async def mark_run_started(db: AsyncSession, run_id: UUID) -> None:
     run = await db.get(AgentRun, run_id)
     if run is None:

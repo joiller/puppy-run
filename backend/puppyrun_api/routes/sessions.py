@@ -179,6 +179,7 @@ async def start_agent_run(
     redis = await _open_redis()
     policy = _demo_policy(redis)
     receipt = None
+    run = None
     try:
         if _demo_safety_is_enabled():
             receipt = await policy.consume_live_run(
@@ -189,9 +190,12 @@ async def start_agent_run(
             "run_phase1_agent_job", str(run.id), _job_id=f"phase1:{run.id}"
         )
         run.job_id = job.job_id if job is not None else f"phase1:{run.id}"
-    except Exception:
+    except Exception as exc:
         if receipt is not None:
             await policy.rollback_live_run(receipt)
+        if run is not None:
+            await session_repo.mark_agent_run_enqueue_failed(db, run.id, exc)
+            raise HTTPException(status_code=503, detail="failed to enqueue agent run") from exc
         raise
     finally:
         await redis.close()

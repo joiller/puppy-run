@@ -1,5 +1,6 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from puppyrun_api import models
@@ -72,7 +73,10 @@ async def phase5_client(monkeypatch: pytest.MonkeyPatch):
 
     app = create_app()
     app.dependency_overrides[get_session] = override_get_session
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
         yield client, fake_redis, maker
 
     get_settings.cache_clear()
@@ -218,6 +222,61 @@ async def test_phase2_enqueue_failure_rolls_back_live_quota(phase5_client) -> No
     assert failed.status_code == 503
     assert failed.json()["detail"] == "failed to enqueue phase2 run"
     assert allowed.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_phase1_enqueue_failure_marks_failed_and_rolls_back_live_quota(
+    phase5_client,
+) -> None:
+    client, fake_redis, maker = phase5_client
+    async with maker() as db:
+        failing_session = await create_decision_session(
+            db,
+            "Compare LangGraph and OpenAI Agents SDK for a stateful Agent runtime.",
+        )
+        allowed_session = await create_decision_session(
+            db,
+            "Compare CrewAI and AutoGen for a stateful Agent runtime.",
+        )
+        failing_session_id = failing_session.id
+        allowed_session_id = allowed_session.id
+
+    fake_redis.enqueue_failures = 1
+    failed = await client.post(f"/api/v1/sessions/{failing_session_id}/runs")
+    allowed = await client.post(f"/api/v1/sessions/{allowed_session_id}/runs")
+
+    assert failed.status_code == 503
+    assert failed.json()["detail"] == "failed to enqueue agent run"
+    assert allowed.status_code == 202
+
+    async with maker() as db:
+        run = (
+            await db.execute(
+                select(models.AgentRun).where(
+                    models.AgentRun.session_id == failing_session_id
+                )
+            )
+        ).scalar_one()
+        session = await db.get(models.DecisionSession, failing_session_id)
+        assert session is not None
+        assert run.status == models.AgentRunStatus.failed
+        assert run.job_id is None
+        assert session.status == models.DecisionSessionStatus.failed
+        assert session.workflow_stage == "failed"
+
+        events = (
+            await db.execute(
+                select(models.AgentEvent)
+                .where(models.AgentEvent.run_id == run.id)
+                .order_by(models.AgentEvent.created_at.asc())
+            )
+        ).scalars().all()
+        assert [event.event_type for event in events] == ["phase1_enqueue_failed"]
+        assert events[0].payload == {
+            "error": "redis enqueue failed",
+            "error_type": "RuntimeError",
+            "phase": "enqueue",
+        }
 
 
 async def _create_phase2_ready_session(
