@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ApiError,
   createDecisionVersion,
   createSession,
   getWorkspace,
@@ -130,6 +131,22 @@ function scoreImpactLabel(scoreImpact: number): string {
 
 function sourceTypeLabel(sourceType: string | null): string {
   return sourceType ?? "internal";
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    return err.message;
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "object" && err !== null && "message" in err) {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+  return String(err);
 }
 
 export default function App() {
@@ -284,7 +301,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    refreshSessions().catch((err: unknown) => setError(String(err)));
+    refreshSessions().catch((err: unknown) => setError(errorMessage(err)));
     const timer = window.setInterval(() => {
       refreshSessions().catch(() => undefined);
     }, 2000);
@@ -302,7 +319,7 @@ export default function App() {
       await loadWorkspace(created);
       await refreshSessions(created.id, selectedVersionIdRef.current);
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     } finally {
       setIsBusy(false);
     }
@@ -326,7 +343,7 @@ export default function App() {
       );
       await refreshSessions(result.session.id, actionVersionId);
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     } finally {
       setIsBusy(false);
     }
@@ -348,7 +365,7 @@ export default function App() {
       applyWorkspace(nextWorkspace, actionVersionId);
       setClarificationAnswer("");
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     } finally {
       setIsBusy(false);
     }
@@ -374,7 +391,7 @@ export default function App() {
       return true;
     } catch (err) {
       if (draftRequestId === draftRequestIdRef.current) {
-        setError(String(err));
+        setError(errorMessage(err));
       }
       return false;
     } finally {
@@ -478,7 +495,7 @@ export default function App() {
       setSelectedVersionId(null);
       await refreshSessions(result.session.id, null);
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     } finally {
       setIsVersionBusy(false);
     }
@@ -570,7 +587,7 @@ export default function App() {
                 aria-label={`${session.title} ${session.workflow_stage}`}
                 className={selected?.id === session.id ? "session selected" : "session"}
                 key={session.id}
-                onClick={() => loadWorkspace(session).catch((err: unknown) => setError(String(err)))}
+                onClick={() => loadWorkspace(session).catch((err: unknown) => setError(errorMessage(err)))}
                 type="button"
               >
                 <span>{session.title}</span>
@@ -607,7 +624,9 @@ export default function App() {
                   aria-label={`Version ${version.version_number} ${version.status}`}
                   className={version.id === selectedVersionId ? "version-pill active" : "version-pill"}
                   key={version.id}
-                  onClick={() => selected && loadWorkspace(selected, version.id).catch((err) => setError(String(err)))}
+                  onClick={() =>
+                    selected && loadWorkspace(selected, version.id).catch((err) => setError(errorMessage(err)))
+                  }
                   type="button"
                 >
                   <span>v{version.version_number}</span>

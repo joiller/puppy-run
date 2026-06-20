@@ -272,3 +272,27 @@ export interface StartAgentRunResponse {
     updated_at: string;
   };
 }
+
+export interface DemoSafetyError {
+  code: string;
+  message: string;
+  limit: number | null;
+  remaining: number | null;
+  reset_at: string | null;
+}
+
+export interface DemoSafetyStatus {
+  demo_safety_enabled: boolean;
+  live_demo_enabled: boolean;
+  global_live_run_daily_limit: number;
+  global_live_runs_used: number;
+  global_live_runs_remaining: number;
+  live_run_daily_limit_per_ip: number;
+  caller_live_runs_used: number;
+  caller_live_runs_remaining: number;
+  session_create_daily_limit_per_ip: number;
+  caller_session_creates_used: number;
+  caller_session_creates_remaining: number;
+  read_rate_limit_per_minute_per_ip: number;
+  reset_at: string;
+}

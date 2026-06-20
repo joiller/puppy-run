@@ -32,6 +32,7 @@ import {
 } from "./workbench";
 
 vi.mock("./api", () => ({
+  ApiError: class ApiError extends Error {},
   createDecisionVersion: vi.fn(),
   createSession: vi.fn(),
   getWorkspace: vi.fn(),
@@ -736,6 +737,32 @@ describe("api functions", () => {
       expect.any(Object)
     );
   });
+
+  it("throws typed API errors for demo safety responses", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          code: "live_run_daily_limit_exceeded",
+          message: "The public live demo has reached today's run limit.",
+          limit: 20,
+          remaining: 0,
+          reset_at: "2026-06-21T00:00:00Z"
+        }),
+        {
+          status: 429,
+          headers: { "Content-Type": "application/json" }
+        }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const actualApi = await vi.importActual<typeof import("./api")>("./api");
+
+    await expect(actualApi.startRun("session-1")).rejects.toMatchObject({
+      status: 429,
+      code: "live_run_daily_limit_exceeded",
+      message: "The public live demo has reached today's run limit."
+    });
+  });
 });
 
 describe("App", () => {
@@ -761,6 +788,35 @@ describe("App", () => {
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("shows friendly public demo quota errors", async () => {
+    const ready = makeSession("created");
+    const workspace = makeWorkspace(
+      Object.assign({}, ready, { workflow_stage: "ready_for_research" })
+    );
+
+    listSessionsMock.mockImplementation(async () => [workspace.session]);
+    getWorkspaceMock.mockImplementation(async () => workspace);
+    startRunMock.mockRejectedValue({
+      status: 429,
+      code: "live_run_daily_limit_exceeded",
+      message: "The public live demo has reached today's run limit. Please try again after the reset."
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Compare LangGraph/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Compare LangGraph/ }));
+    await waitFor(() => {
+      expect(getRunButton().disabled).toBe(false);
+    });
+    fireEvent.click(getRunButton());
+
+    await waitFor(() => {
+      expect(screen.getByText(/public live demo has reached today's run limit/i)).toBeTruthy();
+    });
   });
 
   it("shows clarification, recommendation, evidence, trace, version, matrix, drawer, and ADR for a Phase 1 run", async () => {
