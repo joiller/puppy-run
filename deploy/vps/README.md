@@ -51,9 +51,11 @@ PUPPYRUN_CORS_ORIGINS=["https://demo.example.com"]
 
 ### Phase 5 public demo safety
 
-For a public live DeepSeek demo, set these values in `deploy/vps/.env`:
+For a public live DeepSeek demo, set the live provider credentials and safety values in `deploy/vps/.env`:
 
 ```env
+PUPPYRUN_LLM_PROVIDER=deepseek
+PUPPYRUN_DEEPSEEK_API_KEY=replace-with-private-deepseek-key
 PUPPYRUN_DEMO_SAFETY_ENABLED=true
 PUPPYRUN_LIVE_DEMO_ENABLED=true
 PUPPYRUN_ADMIN_TOKEN=replace-with-private-admin-token
@@ -64,28 +66,38 @@ PUPPYRUN_READ_RATE_LIMIT_PER_MINUTE_PER_IP=120
 PUPPYRUN_CLIENT_IP_HEADER=X-Forwarded-For
 ```
 
-Before starting the stack, generate a strong private admin token and replace `PUPPYRUN_ADMIN_TOKEN=replace-with-private-admin-token`. Do not start the public demo if `PUPPYRUN_ADMIN_TOKEN` is empty or still set to `replace-with-private-admin-token`.
+Before starting the stack, generate a private DeepSeek key and a strong private admin token. Replace `PUPPYRUN_DEEPSEEK_API_KEY=replace-with-private-deepseek-key` and `PUPPYRUN_ADMIN_TOKEN=replace-with-private-admin-token`. Do not start the public demo if `PUPPYRUN_LLM_PROVIDER` is not `deepseek`, if either value is empty, or if either value still uses the checked-in placeholder.
 
-Use this local preflight before `docker compose up`:
+Use this local preflight as a required gate before `docker compose up`. A nonzero exit is a stop condition:
 
 ```sh
 python3 - <<'PY'
 from pathlib import Path
 
-token = ""
+env = {}
 for line in Path("deploy/vps/.env").read_text().splitlines():
-    if line.startswith("PUPPYRUN_ADMIN_TOKEN="):
-        token = line.split("=", 1)[1].strip()
-        break
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        continue
+    key, value = stripped.split("=", 1)
+    env[key] = value.strip()
 
-if not token or token == "replace-with-private-admin-token":
+if env.get("PUPPYRUN_LLM_PROVIDER") != "deepseek":
+    raise SystemExit("Set PUPPYRUN_LLM_PROVIDER=deepseek before public live demo startup.")
+
+deepseek_key = env.get("PUPPYRUN_DEEPSEEK_API_KEY", "")
+if not deepseek_key or deepseek_key == "replace-with-private-deepseek-key":
+    raise SystemExit("Set PUPPYRUN_DEEPSEEK_API_KEY to a private non-placeholder value before startup.")
+
+admin_token = env.get("PUPPYRUN_ADMIN_TOKEN", "")
+if not admin_token or admin_token == "replace-with-private-admin-token":
     raise SystemExit("Set PUPPYRUN_ADMIN_TOKEN to a private non-placeholder value before startup.")
 
-print("PUPPYRUN_ADMIN_TOKEN is set to a non-placeholder value.")
+print("PUPPYRUN_LLM_PROVIDER, PUPPYRUN_DEEPSEEK_API_KEY, and PUPPYRUN_ADMIN_TOKEN are set for public live demo startup.")
 PY
 ```
 
-Do not commit the real admin token. After deployment, open `/admin`, enter the token, confirm the current counts, disable live demo, verify new runs are blocked, then re-enable it.
+Do not commit the real DeepSeek key or admin token. After deployment, open `/admin`, enter the token, confirm the current counts, disable live demo, verify new runs are blocked, then re-enable it.
 
 Start the stack:
 
@@ -150,7 +162,7 @@ Use your configured `PUPPYRUN_PUBLIC_HOST` for the public smoke test.
 
 1. Open `https://${PUPPYRUN_PUBLIC_HOST}`.
 2. Create a decision session.
-3. Click `Start dummy Agent run`.
+3. Click `Run Phase 1 Agent`.
 4. Do not click `Refresh`.
 5. Wait until the selected session detail panel shows `completed`.
 6. Open `https://${PUPPYRUN_PUBLIC_HOST}/health` and confirm the API health JSON.

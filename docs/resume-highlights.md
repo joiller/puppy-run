@@ -28,7 +28,7 @@ Do not include real hosts, raw IPs, SSH targets, tokens, credentials, secrets, o
 
 ### Phase 5 public live demo safety shell
 
-- **What shipped:** Added Redis-backed public demo quotas, live-run kill switch, token-protected admin controls, frontend quota messaging, and VPS configuration for a no-login live DeepSeek demo.
+- **What shipped:** Added Redis-backed public demo quotas, live-run kill switch, token-protected admin controls, frontend quota messaging, and VPS configuration placeholders and preflight checks for a no-login live DeepSeek demo.
 - **Why it matters:** Turns PuppyRun from a local/live-eval prototype into a safer public demo by bounding cost, limiting abuse, and giving the operator a runtime shutoff without full RBAC.
-- **Evidence:** Phase 5 backend and frontend tests, Docker Compose config check, Docker smoke, and local browser/admin acceptance from this Phase 5 release session.
+- **Evidence:** Phase 5 backend and frontend tests, Docker Compose config check, Docker smoke, and local browser/admin acceptance from this Phase 5 release session; VPS DeepSeek credentials remain placeholder-only in repo.
 - **Status:** Implemented and verified locally in Phase 5; public VPS release and real DeepSeek acceptance remain separate.
