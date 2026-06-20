@@ -64,6 +64,27 @@ PUPPYRUN_READ_RATE_LIMIT_PER_MINUTE_PER_IP=120
 PUPPYRUN_CLIENT_IP_HEADER=X-Forwarded-For
 ```
 
+Before starting the stack, generate a strong private admin token and replace `PUPPYRUN_ADMIN_TOKEN=replace-with-private-admin-token`. Do not start the public demo if `PUPPYRUN_ADMIN_TOKEN` is empty or still set to `replace-with-private-admin-token`.
+
+Use this local preflight before `docker compose up`:
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+
+token = ""
+for line in Path("deploy/vps/.env").read_text().splitlines():
+    if line.startswith("PUPPYRUN_ADMIN_TOKEN="):
+        token = line.split("=", 1)[1].strip()
+        break
+
+if not token or token == "replace-with-private-admin-token":
+    raise SystemExit("Set PUPPYRUN_ADMIN_TOKEN to a private non-placeholder value before startup.")
+
+print("PUPPYRUN_ADMIN_TOKEN is set to a non-placeholder value.")
+PY
+```
+
 Do not commit the real admin token. After deployment, open `/admin`, enter the token, confirm the current counts, disable live demo, verify new runs are blocked, then re-enable it.
 
 Start the stack:
